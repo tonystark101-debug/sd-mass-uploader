@@ -259,6 +259,18 @@ Google Cloud refused Some file(s) from the card in a way that retrying will not 
 
 Button: **Retry this card**
 
+## E-VENDOR-REPORT: The vendor platform was not told about this packet
+
+*error*
+
+details. The cards are safe; the station tries again every minute.
+
+1. Check the internet connection.
+2. If it says the key was refused, ask the office for this station's key.
+3. Press Try again now.
+
+Button: **Try again now**
+
 ## E-VERIFY-MISMATCH: Cloud copy did not match the card
 
 *error*
@@ -334,6 +346,16 @@ Some file(s) on the card have names this computer cannot read, so they were skip
 
 1. Report these files; a copy with corrected names may be needed.
 
+## W-LINE-NO-INTERNET: An internet line is not working
+
+*warning*
+
+details. Uploads carry on over the other lines; this one is checked again every 30 seconds and joins by itself when it works.
+
+1. Check the cable, the router or the phone's hotspot for this line.
+2. Open a website on this computer with only this line connected, to check it.
+3. If it shows the same address as another connection, use a different phone or router for one of them.
+
 ## W-NETWORK-RETRYING: Connection problems: retrying
 
 *warning*
@@ -394,6 +416,14 @@ the card is connected at 480 Mbps. It works, but reads much slower than USB 3 (5
 
 1. Move the reader to a blue USB 3 port on the hub or laptop.
 2. Use a USB 3 cable and hub; some hub ports are USB 2 only.
+
+## I-LINE-SHARED: Two connections share one internet line
+
+*info*
+
+details, so the second adds no upload speed. Both are used; nothing is wrong.
+
+1. For more speed, connect a line from a different router, ISP or phone.
 
 ## I-PEAKAI-DETAILS: Recording dates or hours are not known
 

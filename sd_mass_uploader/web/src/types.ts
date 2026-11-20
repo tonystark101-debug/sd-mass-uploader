@@ -92,6 +92,47 @@ export interface Destination {
     last_error: string | null; response: string }[];
   infos?: { card_id: string; pass_name: string; object_name: string | null;
     written_at: string | null; last_error: string | null }[];
+  vendor_platform?: boolean;
+  packet?: { ref: string; packet: VendorPacket; cards_detected: number; cards_counted: number;
+    note: string; started_at: string | null; uploaded_at: string | null;
+    uploaded: { hours: number; cards_uploaded: number; files: number; bytes: number } | null;
+    last_error: string | null };
+}
+
+export interface LineView {
+  key: string; name: string; kind: string; ip: string; gateway: string;
+  public_ip: string | null;
+  state: "active" | "checking" | "no_internet" | "resting" | "spare" | "gone";
+  note: string | null; shares_with: string | null; uploads: number; slots: number;
+  mbit_per_s: number; mb_per_s: number; sent_bytes: number; files_done: number;
+}
+
+export interface NetworkView {
+  enabled: boolean;
+  mode: "multi" | "single" | "default" | "off";
+  working: number; capacity: number; total_mbit_per_s: number; total_mb_per_s: number;
+  error: string | null;
+  lines: LineView[];
+}
+
+export interface VendorPacket {
+  ref: string; code: string; vendor: string; manager: string | null; received_by: string | null;
+  environment: string; site: string; city: string; device_kind: string;
+  cards_sent: number; cards_received: number | null;
+  sent_at: string; received_at: string | null; dispatched_at: string | null;
+  arrived_at: string | null; transport: string;
+  days: { recorded_from: string; recorded_to: string; devices: number; cards: number;
+    hours_estimate: number }[];
+  hours_declared: number; recorded_from: string | null; recorded_to: string | null;
+  stages: Record<string, string>;
+  uploaded: { at: string; hours: number | null; station: string | null } | null;
+}
+
+export interface PacketPreview {
+  packet: VendorPacket;
+  details: Record<string, string | number>;
+  cards: { detected: number; counted: number; expected: number | null };
+  problems: string[];
 }
 
 export interface StationState {
@@ -106,6 +147,7 @@ export interface StationState {
   waiting_cards: { card_id: string; volume_label: string | null; mount_point: string }[];
   problems: Problem[];
   destination: Destination;
+  network?: NetworkView;
   daemon: { pid?: number; running?: boolean; source?: string; started_at?: string };
 }
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
 from typing import Any, BinaryIO, Protocol
 
 from src.core.exceptions import (
@@ -17,6 +19,7 @@ from src.core.exceptions import (
 )
 from src.core.models import RemoteObject
 from src.core.settings import GoogleCloudSettings, UploadSettings
+from src.network.lines import current_line
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,8 @@ def translate_error(exc: Exception, context: str) -> UploaderError:
     from google.cloud.storage.exceptions import DataCorruption, InvalidResponse
 
     message = f"{context}: {exc}"
+    if isinstance(exc, UploaderError):
+        return exc  # Already ours, e.g. LineLostError raised inside the HTTP stack.
     if isinstance(exc, DataCorruption):
         return VerificationMismatch(message)
     if isinstance(exc, api.PreconditionFailed):
@@ -87,20 +92,59 @@ def _translatable() -> tuple[type[BaseException], ...]:
             requests.RequestException, ConnectionError, TimeoutError)
 
 
+def line_client(base: Any, line: Any, pool_maxsize: int) -> Any:
+    """A copy of `base` (same project, credentials and endpoint) whose requests use `line`."""
+    from google.auth.transport.requests import AuthorizedSession
+    from google.cloud import storage
+
+    from src.network.binding import pin
+
+    credentials = base._credentials  # Stable attribute of google-cloud-core clients.
+    session = pin(AuthorizedSession(credentials), line, line.generation, pool_maxsize)
+    return storage.Client(project=base.project, credentials=credentials, _http=session)
+
+
 class GcsObjectStore:
+    """`client` is the default-connection client. With several internet lines, each upload
+    thread is pinned to a line (src/network) and gets a client whose connections use it."""
+
     def __init__(self, cloud: GoogleCloudSettings, upload: UploadSettings,
-                 client: Any = None) -> None:
+                 client: Any = None,
+                 line_client_factory: Callable[[Any, Any], Any] | None = None) -> None:
         self._cloud = cloud
         self._upload = upload
         self._client = client
         self._bucket: Any = None
         self._errors = _translatable()
+        self._line_client_factory = line_client_factory or (
+            lambda base, line: line_client(base, line, pool_maxsize=16))
+        self._line_buckets: dict[tuple[str, int], Any] = {}
+        self._line_lock = threading.Lock()
 
     @property
     def _timeout(self) -> tuple[float, float]:
         return (_CONNECT_TIMEOUT, self._upload.request_timeout_seconds)
 
     def _get_bucket(self) -> Any:
+        line = current_line()
+        if line is None:
+            return self._default_bucket()
+        key = (line.key, line.generation)
+        with self._line_lock:
+            bucket = self._line_buckets.get(key)
+            if bucket is None:
+                base = self._default_bucket().client
+                try:
+                    client = self._line_client_factory(base, line)
+                except self._errors as exc:
+                    raise translate_error(exc, f"Creating a client for line {line.name}") from exc
+                bucket = client.bucket(self._cloud.bucket_name)
+                for old in [k for k in self._line_buckets if k[0] == line.key]:
+                    del self._line_buckets[old]  # An older address of this line.
+                self._line_buckets[key] = bucket
+            return bucket
+
+    def _default_bucket(self) -> Any:
         if self._bucket is None:
             from google.cloud import storage
 

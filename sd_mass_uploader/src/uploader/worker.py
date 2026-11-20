@@ -21,6 +21,7 @@ from src.core.models import RemoteObject
 from src.core.settings import UploadSettings
 from src.core.timeutil import utc_now
 from src.database.repositories import Task
+from src.network.lines import LinePool, using_line
 from src.platform.paths import open_source_readonly
 from src.uploader.card_locator import CardLocator
 from src.uploader.gcs_client import ObjectStore
@@ -41,6 +42,7 @@ class UploadContext:
     metadata: dict[str, str] = field(default_factory=dict)
     compute_sha256: bool = False
     overwrite_reason: str | None = None
+    lines: LinePool | None = None  # Several internet lines: each file is pinned to one.
 
 
 @dataclass
@@ -60,6 +62,7 @@ class TaskOutcome:
     started_at: str | None = None
     seconds: float = 0.0
     error: Exception | None = None
+    line: str | None = None  # Name of the internet line used, if pinned.
 
 
 def _stat_source(path: str, task: Task, card_id: str, locator: CardLocator) -> os.stat_result:
@@ -206,12 +209,18 @@ def upload_task(task: Task, ctx: UploadContext) -> TaskOutcome:
     """Never raises: failures are returned so one file cannot disturb the others."""
     outcome = TaskOutcome(task)
     started_at, started = utc_now(), time.perf_counter()
+    line = ctx.lines.acquire() if ctx.lines is not None else None
     try:
-        attempt = _Attempt(task, ctx)
-        outcome = attempt.outcome
-        attempt.run()
+        with using_line(line):
+            attempt = _Attempt(task, ctx)
+            outcome = attempt.outcome
+            attempt.run()
     except Exception as exc:  # noqa: BLE001 - isolation boundary; classified by the manager
         outcome.error = exc
+    finally:
+        if ctx.lines is not None:
+            ctx.lines.release(line, outcome.error)
+    outcome.line = line.name if line is not None else None
     outcome.started_at = started_at
     outcome.seconds = time.perf_counter() - started
     return outcome

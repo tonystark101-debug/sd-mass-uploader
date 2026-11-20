@@ -47,8 +47,18 @@ def build_profile(app):
 
     keeper = PassKeeper(pack, settings.peakai, key_loader)
     store = PeakAiStore(pack, keeper, settings.upload)
+    vendor = packets = None
+    if settings.vendor_platform.enabled:  # Sessions open from a packet code (src/vendor).
+        from src.database.vendor_repository import VendorPacketRepository
+        from src.vendor.client import VendorPlatform, read_station_key
+
+        station_key = settings.resolve(settings.vendor_platform.key_file)
+        vendor = VendorPlatform(settings.vendor_platform,
+                                lambda: read_station_key(station_key))
+        packets = VendorPacketRepository(app.db)
     profile = PeakAiProfile(settings, pack, keeper, store, app.sessions, app.scans,
-                            PeakAiRepository(app.db), key_loader)
+                            PeakAiRepository(app.db), key_loader, vendor=vendor,
+                            packets=packets)
     logger.info("PeakAI pack %s (v%s) is active: uploads go to gs://%s", pack.source_name,
                 pack.version, pack.bucket)
     return profile, profile.store
@@ -121,9 +131,11 @@ class Daemon:
         profile, store_factory = build_profile(app)
         if profile is not None:
             self.keeper = profile.keeper
+        # Internet lines: found, checked and measured for the whole life of the station.
+        self.lines = app.lines(on_event=self.bus.publish)
         self.station = Station(settings, app.sessions, app.scans, StationRepository(app.db),
                                store_factory, app.finalizer_or_offline, self.bus,
-                               profile=profile)
+                               profile=profile, lines=self.lines)
         self._keeper_stop = threading.Event()
         self._source = create_source(settings.station, app.adapter, app.inventory,
                                      settings.base_dir)
@@ -147,6 +159,8 @@ class Daemon:
         waker = UdevWaker(self._wake)
         try:
             self.station.restore()
+            if self.lines is not None:
+                self.lines.start()
             self._open_from_file()
             self._start_api()
             if self.keeper is not None:  # Keeps every pass's token fresh, like peakai-tokens.sh.
@@ -178,6 +192,8 @@ class Daemon:
                 self.api.stop()
             logger.info("Station stopping: finishing files in progress")
             self.station.shutdown()
+            if self.lines is not None:
+                self.lines.stop()
             self._write_state(stopped=True)
             self._lock.release()
         return 0

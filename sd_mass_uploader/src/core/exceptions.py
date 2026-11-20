@@ -53,6 +53,14 @@ class TransientUploadError(UploaderError):
     """A temporary network or service failure. Safe to retry."""
 
 
+class LineLostError(TransientUploadError):
+    """The internet line an upload was using was unplugged or changed address.
+
+    Deliberately not an OSError, so neither the HTTP stack nor the Google client retries it on
+    the dead line. The file goes back in the queue without using a retry.
+    """
+
+
 class PermanentUploadError(UploaderError):
     """GCS rejected the request in a way a retry cannot fix."""
 

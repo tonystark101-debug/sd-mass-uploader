@@ -238,6 +238,27 @@ _SPECS = [
         ("Move the reader to a blue USB 3 port on the hub or laptop.",
          "Use a USB 3 cable and hub; some hub ports are USB 2 only."),
         tags=("device",)),
+    ProblemSpec(
+        "W-LINE-NO-INTERNET", Severity.WARNING, "An internet line is not working",
+        "{detail}. Uploads carry on over the other lines; this one is checked again every "
+        "30 seconds and joins by itself when it works.",
+        ("Check the cable, the router or the phone's hotspot for this line.",
+         "Open a website on this computer with only this line connected, to check it.",
+         "If it shows the same address as another connection, use a different phone or "
+         "router for one of them."),
+        card_scoped=False, tags=("network",)),
+    ProblemSpec(
+        "I-LINE-SHARED", Severity.INFO, "Two connections share one internet line",
+        "{detail}, so the second adds no upload speed. Both are used; nothing is wrong.",
+        ("For more speed, connect a line from a different router, ISP or phone.",),
+        card_scoped=False, tags=("network",)),
+    ProblemSpec(
+        "E-VENDOR-REPORT", Severity.ERROR, "The vendor platform was not told about this packet",
+        "{detail}. The cards are safe; the station tries again every minute.",
+        ("Check the internet connection.",
+         "If it says the key was refused, ask the office for this station's key.",
+         "Press Try again now."),
+        action=FixAction.RETRY_REPORTS, card_scoped=False, tags=("network",)),
     # ---------------------------------------------------------------- card state
     ProblemSpec(
         "E-CARD-REMOVED", Severity.ERROR, "Card removed before it finished",
@@ -367,6 +388,7 @@ ERROR_CLASS_CODES: dict[str, str] = {
     "AuthenticationError": "E-GCS-AUTH",
     "GcsPermissionError": "E-GCS-PERMISSION",
     "TransientUploadError": "E-UPLOAD-FAILED",
+    "LineLostError": "W-NETWORK-RETRYING",  # Its line was unplugged; it moves to another.
     "PermanentUploadError": "E-UPLOAD-REJECTED",
     "ObjectExistsError": "E-CONFLICT",
     "VerificationMismatch": "E-VERIFY-MISMATCH",

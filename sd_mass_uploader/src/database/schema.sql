@@ -274,3 +274,19 @@ CREATE TABLE IF NOT EXISTS peakai_reports (
     next_try REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, pass_name)
 );
+
+-- Vendor platform packet behind a session (src/vendor): what the operator counted, and whether the
+-- platform has been told it started and was uploaded. Reports retry until the platform answers.
+CREATE TABLE IF NOT EXISTS vendor_packets (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    ref TEXT NOT NULL,
+    packet_json TEXT NOT NULL,
+    cards_detected INTEGER NOT NULL,
+    cards_counted INTEGER NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    uploaded_at TEXT,
+    uploaded_json TEXT,
+    last_error TEXT,
+    next_try REAL NOT NULL DEFAULT 0
+);

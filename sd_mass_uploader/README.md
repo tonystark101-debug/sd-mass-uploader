@@ -258,6 +258,47 @@ passes this laptop has. Only after you confirm does it store the laptop key priv
 {"activity": "garage", "city": "bijapur", "vendor_name": "Narayan", "batch": "batch-9"}
 ```
 
+### Several internet lines
+
+The station uploads over **every internet line plugged in, at the same time**: Ethernet, Wi-Fi,
+USB adapters and phone tethering. Nothing to set up:
+
+- **Found by itself.** Every 5 seconds it lists the connections that have their own route to the
+  internet, and tests each one with a real connection to Google through that line only.
+- **Plug in a line, it joins.** A new line gets its own 4 upload slots within about 10 seconds,
+  so the station sends more files at once and the total speed rises.
+- **Balanced per file.** Each file goes through one line. A new file goes to the line with the
+  most free slots, so every line carries several uploads and fills up.
+- **Pull a line, nothing is lost.** Its files stop at once and go back in the queue *without
+  using a retry*; the other lines finish them. A line with 3 network failures in a row rests for
+  a minute and is tested again.
+- **Speed you can see.** The console's *Internet lines* panel shows each line's upload speed now,
+  uploads in flight, bytes sent and public address, plus the total. `station status`, `upload`
+  and `lines` print the same in the terminal.
+- **Two cables, one router.** If two connections reach the internet with the same public
+  address they share one line. Both are used, but the console says the second adds no speed.
+
+```bash
+python main.py lines           # List the lines and test each one
+python main.py lines --watch   # Keep checking: watch a line appear when you plug it in
+```
+
+Settings are under `network:` in `config.yaml`. `max_lines: 0` uses every line; `max_lines: 2`
+uses at most two (the rest wait as spares and step in if one fails). `workers_per_line` (4) sets
+uploads per line, and `max_total_workers` (16) caps them all; memory is about that cap times
+`upload.chunk_size_mib`. With `network.enabled: false`, or when no line passes its test, uploads
+use the computer's default connection as before.
+
+How each upload is kept on its line: on Ubuntu, sockets are bound to the line's network device
+(`SO_BINDTODEVICE`, allowed without root on kernel 5.7+; Ubuntu 24.04 has 6.8). On Windows they
+are bound to the line's address, which Windows sends only through that adapter. Proxies are
+switched off for uploads, because a proxy would ignore the binding. Two phones that hand out the
+same address (two iPhone hotspots are both 172.20.10.x) cannot be told apart, so neither is used
+until one is unplugged. On Ubuntu, strict reverse-path filtering (`rp_filter=1`) drops a second
+line's replies; Ubuntu's default (2) is fine, and `lines` warns if it is 1. On Windows, its
+Connection Manager may switch off extra automatic connections; connect extra lines by hand or
+turn that policy off.
+
 ### Problems and how to fix them
 
 When something goes wrong, `station status` lists a **PROBLEMS** section, most severe first.
@@ -336,6 +377,7 @@ that allows read-only mounts only.
 | `stop` | Ask a running upload to stop after the files in progress |
 | `gcs-test` | Upload and check one small test file |
 | `benchmark` | Measure simultaneous read speed from all cards |
+| `lines` | List the internet lines and test each one; `--watch` keeps checking |
 | `daemon` | Run the always-on station (see Station mode) |
 | `station` | Send the station a command, or `station status` |
 | `simulate` | Create, remove or insert simulated cards for testing |
@@ -446,5 +488,9 @@ Physical testing is separate: see [docs/HARDWARE_ACCEPTANCE.md](docs/HARDWARE_AC
 - **Station mode on real hardware is untested.** Automatic read-only mounting (udisks2), udev
   events and the systemd unit have only been checked with mocks and simulated cards.
 - **`stop` in station mode** pauses every card instead of ending the session.
+- **Several internet lines were tested with simulated lines only** (separate local addresses into
+  the local storage stand-in, with a line plugged in and pulled out mid-upload). On this Windows
+  build laptop `lines` found and tested its real Wi-Fi line; two real lines on Ubuntu have not been
+  run yet. Run `python main.py lines` on the station with both lines connected before relying on it.
 - **Resumable sessions** are not kept across restarts. A large file interrupted by a crash starts
   again from zero, and an unfinished GCS session simply expires.

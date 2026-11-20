@@ -29,10 +29,11 @@ from src.core.timeutil import age_seconds, utc_now
 from src.database.repositories import ScanRepository, SessionRepository
 from src.database.station_repository import CardCounts, StationRepository, card_from_json
 from src.inventory.inventory_service import ScanService
+from src.network.lines import LinePool, disabled_view
 from src.station.card_state import StationCounters, count_cards, derive_state
 from src.station.events import EventBus
 from src.station.profile import GenericProfile, QueueOutcome, UploadProfile
-from src.station.sources import PollResult
+from src.station.sources import PollResult, SourceIssue
 from src.uploader.card_locator import CardLocator
 from src.uploader.finalize import SessionFinalizer
 from src.uploader.gcs_client import ObjectStore
@@ -96,6 +97,7 @@ class StationView:
     waiting_cards: list[dict] = field(default_factory=list)  # Inserted, but no session is open.
     problems: list[dict] = field(default_factory=list)  # Plain-language, most severe first.
     destination: dict = field(default_factory=dict)  # Where uploads go (profile's view).
+    network: dict = field(default_factory=dict)  # Internet lines and their speed (src/network).
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -137,8 +139,10 @@ class Station:
     def __init__(self, settings: Settings, sessions: SessionRepository, scans: ScanRepository,
                  station: StationRepository, store_factory: Callable[[], ObjectStore],
                  finalizer_factory: Callable[[ObjectStore | None], SessionFinalizer],
-                 bus: EventBus | None = None, profile: UploadProfile | None = None) -> None:
+                 bus: EventBus | None = None, profile: UploadProfile | None = None,
+                 lines: LinePool | None = None) -> None:
         self._settings = settings
+        self.lines = lines  # Several internet lines (src/network); None = default connection.
         self.profile: UploadProfile = profile or GenericProfile(settings, sessions, scans)
         self._housekeeping = False
         self._sessions = sessions
@@ -231,6 +235,68 @@ class Station:
         if waiting:  # Cards already inserted join the new session.
             self.update_presence(PollResult(waiting + list(self._present.values())))
         return created.session_id
+
+    # ------------------------------------------------------------------ vendor platform packets
+
+    def _vendor(self):
+        vendor = getattr(self.profile, "vendor", None)
+        if vendor is None:
+            raise StationError("Opening a session from a packet code is not set up on this "
+                               "station (vendor_platform.enabled, with a PeakAI pack)")
+        return vendor
+
+    def _lookup_packet(self, code: str) -> dict:
+        from src.vendor.client import VendorPlatformError
+
+        try:
+            answer = self._vendor().lookup(code)
+        except VendorPlatformError as exc:
+            raise StationError(str(exc)) from exc
+        if "packet" not in answer:
+            refs = [item["ref"] for item in answer.get("packets", [])]
+            raise StationError("This code has sent several packets that are not uploaded yet: "
+                               f"{', '.join(refs)}. Type the full reference written on this "
+                               "packet (the code with its date and time).")
+        return answer["packet"]
+
+    def packet_preview(self, code: str, cards_counted: int) -> dict:
+        """Look the packet up and compare the counts. Changes nothing anywhere."""
+        from src.vendor.packet import check_counts, session_metadata
+
+        packet = self._lookup_packet(code)
+        with self._lock:
+            if self._repo.current() is not None:
+                raise StationError("A session is already open. End it before the next packet.")
+            detected = len(self._waiting)
+        check = check_counts(detected, cards_counted, packet)
+        return {"packet": packet, "details": session_metadata(packet,
+                                                              self._settings.vendor_platform),
+                "cards": {"detected": check.detected, "counted": check.counted,
+                          "expected": check.expected}, "problems": check.problems}
+
+    def open_packet_session(self, code: str, cards_counted: int, note: str = "",
+                            auto_upload: bool | None = None) -> str:
+        """The whole start: cards are in, the operator counted them and typed the code."""
+        from src.vendor.packet import check_counts, session_metadata
+
+        packets = getattr(self.profile, "packets", None)
+        preview = self.packet_preview(code, cards_counted)
+        note = " ".join(str(note or "").split())[:300]
+        if preview["problems"] and len(note) < 5:
+            raise StationError(" ".join(preview["problems"]) + " Fix this, or give a reason "
+                               "to go on anyway (it is sent to the vendor platform).")
+        packet = preview["packet"]
+        with self._lock:
+            detected = len(self._waiting)
+        check = check_counts(detected, cards_counted, packet)  # Again: a card may have moved.
+        if check.problems and len(note) < 5:
+            raise StationError(" ".join(check.problems))
+        session_id = self.open_session(session_metadata(packet, self._settings.vendor_platform),
+                                       auto_upload)
+        packets.save(session_id, packet, detected, cards_counted, note)
+        self.bus.publish("packet_opened", ref=packet["ref"], vendor=packet.get("vendor"),
+                         cards=cards_counted, detected=detected)
+        return session_id
 
     def close_session(self, force: bool = False) -> str:
         """End intake. Unfinished cards block this unless `force` is given."""
@@ -622,7 +688,7 @@ class Station:
             self._housekeeping = False
 
     def _run_engine(self, session_id: str, store: ObjectStore) -> None:
-        manager = UploadManager(self._settings, self._sessions, store)
+        manager = UploadManager(self._settings, self._sessions, store, lines=self.lines)
         self.bus.publish("engine_started", session_id=session_id)
         try:
             result = manager.run(session_id, self._locator, self._control,
@@ -664,6 +730,9 @@ class Station:
         actions: dict[str, Callable[[], object]] = {
             "open": lambda: self.open_session(args.get("metadata") or {},
                                               args.get("auto_upload")),
+            "open_packet": lambda: self.open_packet_session(
+                str(args.get("code") or ""), int(args.get("cards_counted") or 0),
+                str(args.get("note") or ""), args.get("auto_upload")),
             "close": lambda: self.close_session(bool(args.get("force"))),
             "pause": lambda: self.pause_card(card),
             "resume": lambda: self.resume_card(card),
@@ -761,15 +830,17 @@ class Station:
                 "running": bool(self._engine and self._engine.is_alive()),
                 "problem": self._engine_problem,
                 "store_error": self._store_error,
-                "workers": self._settings.upload.max_workers,
+                "workers": (self.lines.capacity() if self.lines is not None
+                            else self._settings.upload.max_workers),
             }
+            network = self.lines.view() if self.lines is not None else disabled_view()
             progress_view = self._progress.view()
             issues = [asdict(issue) for issue in self._issues]
             waiting = [asdict(card) for card in self._waiting.values()]
             if session is None:
                 problems = self._problems(None, [])
                 return StationView(utc_now(), None, StationCounters(), [], {}, engine,
-                                   issues, waiting, problems, self.profile.view(None))
+                                   issues, waiting, problems, self.profile.view(None), network)
             session_id = session["session_id"]
             self._publish_state_changes(session_id)
             cards = self._card_views(session_id)
@@ -802,7 +873,7 @@ class Station:
             }
             problems = self._problems(session_id, cards)
             return StationView(utc_now(), info, counters, cards, progress, engine, issues,
-                               waiting, problems, self.profile.view(session_id))
+                               waiting, problems, self.profile.view(session_id), network)
 
     def _problems(self, session_id: str | None, cards: list[CardView]) -> list[dict]:
         facts = AdvisorFacts(
@@ -815,12 +886,18 @@ class Station:
             store_error=((self._store_error_class,
                           self._store_error.removeprefix(f"{self._store_error_class}: "))
                          if self._store_error and session_id else None),
-            issues=list(self._issues),
+            issues=list(self._issues) + self._line_issues(),
             disk_free=self._disk_free(),
             max_retries=self._settings.upload.max_retries,
             extra=self.profile.problems(session_id),
         )
         return as_dicts(self._tracker.update(session_id, evaluate(facts)))
+
+    def _line_issues(self) -> list[SourceIssue]:
+        if self.lines is None:
+            return []
+        return [SourceIssue(code, message, subject)
+                for code, message, subject in self.lines.issues()]
 
     def _disk_free(self) -> tuple[int, int] | None:
         checked, value = self._disk

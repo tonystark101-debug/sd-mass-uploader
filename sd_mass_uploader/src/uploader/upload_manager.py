@@ -11,10 +11,11 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 from src.core.enums import SessionStatus, TaskStatus
-from src.core.exceptions import SourceDisconnectedError
+from src.core.exceptions import LineLostError, SourceDisconnectedError
 from src.core.settings import Settings
 from src.core.timeutil import utc_now
 from src.database.repositories import SessionRepository, Task
+from src.network.lines import LinePool
 from src.uploader.card_locator import CardLocator
 from src.uploader.gcs_client import ObjectStore
 from src.uploader.progress import ProgressTracker, ProgressView
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _TICK_SECONDS = 0.5
 _HEARTBEAT_SECONDS = 10.0
+_MAX_THREADS = 64  # Threads start only as needed; the live limit is the lines' capacity.
 
 
 @dataclass
@@ -47,11 +49,13 @@ class RunResult:
 
 class UploadManager:
     def __init__(self, settings: Settings, sessions: SessionRepository, store: ObjectStore,
-                 on_tick: Callable[[ProgressView], None] | None = None) -> None:
+                 on_tick: Callable[[ProgressView], None] | None = None,
+                 lines: LinePool | None = None) -> None:
         self._settings = settings
         self._sessions = sessions
         self._store = store
         self._on_tick = on_tick
+        self._lines = lines
 
     def run(self, session_id: str, locator: CardLocator, control: RunControl | None = None,
             overwrite_reason: str | None = None,
@@ -76,6 +80,7 @@ class UploadManager:
             metadata=metadata,
             compute_sha256=self._settings.file_scanning.calculate_sha256,
             overwrite_reason=overwrite_reason,
+            lines=self._lines,
         )
         result = RunResult(session_id)
         self._sessions.claim(session_id, os.getpid())
@@ -96,13 +101,16 @@ class UploadManager:
 
     def _loop(self, session_id: str, context: UploadContext, control: RunControl,
               result: RunResult, keep_alive: Callable[[], bool] | None = None) -> None:
-        workers = self._settings.upload.max_workers
         in_flight: dict[Future[TaskOutcome], Task] = {}
         last_beat = time.monotonic()
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="upload") as pool:
+        threads = _MAX_THREADS if self._lines is not None else self._settings.upload.max_workers
+        with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="upload") as pool:
             while True:
                 if self._sessions.stop_requested(session_id):
                     control.stop.set()
+                # With several lines the limit follows them: a line plugged in adds its slots.
+                workers = (self._lines.capacity() if self._lines is not None
+                           else self._settings.upload.max_workers)
                 halting = control.stop.is_set() or result.abort_reason is not None
                 if not halting and len(in_flight) < workers:
                     free = workers - len(in_flight)
@@ -148,6 +156,13 @@ class UploadManager:
                        message)
         progress = context.progress
         progress.rewind_bytes(outcome.bytes_counted)
+        if isinstance(error, LineLostError):
+            # Its line was unplugged: not the file's fault. Straight back in the queue, no retry
+            # used, and another line picks it up.
+            self._sessions.update_task(task.task_id, TaskStatus.PENDING, error_class=name,
+                                       last_error=message, attempts=task.attempts - 1)
+            progress.released()
+            return
         disposition = classify(error)
         if disposition is Disposition.RETRY and task.attempts <= self._settings.upload.max_retries:
             upload = self._settings.upload

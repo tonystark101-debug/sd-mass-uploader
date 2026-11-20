@@ -234,6 +234,31 @@ def cmd_benchmark(app: App, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lines(app: App, args: argparse.Namespace) -> int:
+    """List the internet lines and check each one reaches Google on its own."""
+    lines = app.lines()
+    if lines is None:
+        print("Several internet lines are not in use here (network.enabled is false, this "
+              "system is not supported, or a storage emulator is set). Uploads use the "
+              "computer's default connection.")
+        return 0
+    try:
+        while True:
+            lines.refresh()
+            print(render.render_lines(lines.view()))
+            if not args.watch:
+                break
+            print(f"(checking again in {app.settings.network.rescan_seconds:g} s; "
+                  "Ctrl+C to stop)\n")
+            time.sleep(app.settings.network.rescan_seconds)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        lines.stop()
+    working = lines.view()["working"]
+    return 0 if working else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="main.py", description="SD Mass Uploader")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
@@ -293,6 +318,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--path", action="append", help="Measure this folder instead of cards")
     benchmark.add_argument("--limit-mib", type=float, default=512)
     benchmark.set_defaults(handler=cmd_benchmark)
+
+    lines = commands.add_parser("lines", help="List internet lines and check each reaches Google")
+    lines.add_argument("--watch", action="store_true",
+                       help="Keep checking, to see a line appear when it is plugged in")
+    lines.set_defaults(handler=cmd_lines)
     add_station_parsers(commands)
     return parser
 

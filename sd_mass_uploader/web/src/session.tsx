@@ -1,6 +1,7 @@
 // Start a session: PeakAI's fields when a pack is active, the generic fields otherwise.
 import { useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
+import { PacketStart } from "./packet";
 import type { Destination, StationState } from "./types";
 import { Button, useAction } from "./ui";
 
@@ -40,6 +41,14 @@ function fieldsFor(destination: Destination): Field[] {
 }
 
 export function StartSession({ state }: { state: StationState }) {
+  const [byHand, setByHand] = useState(false);
+  if (state.destination.vendor_platform && !byHand) {
+    return <PacketStart state={state} onTypeByHand={() => setByHand(true)} />;
+  }
+  return <TypedStart state={state} />;
+}
+
+function TypedStart({ state }: { state: StationState }) {
   const destination = state.destination;
   const fields = useMemo(() => fieldsFor(destination), [destination]);
   const [values, setValues] = useState<Record<string, string>>(

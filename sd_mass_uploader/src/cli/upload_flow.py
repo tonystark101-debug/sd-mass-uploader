@@ -131,7 +131,7 @@ class _Signals:
             print("\nFinishing files in progress. Ctrl+C again to stop now.", file=sys.stderr)
 
 
-def _progress_printer() -> Callable:
+def _progress_printer(lines=None) -> Callable:
     last = [0.0]
     live = sys.stderr.isatty()
 
@@ -140,18 +140,43 @@ def _progress_printer() -> Callable:
             return
         last[0] = time.monotonic()
         text = render.render_progress(view)
-        print(f"\r{text:<118}" if live else text, end="" if live else "\n", file=sys.stderr)
+        if lines is not None:
+            text += " | " + render.render_lines_short(lines.view())
+        print(f"\r{text:<160}" if live else text, end="" if live else "\n", file=sys.stderr)
 
     return tick
+
+
+_LINE_WORDS = {"line_ready": "ready", "line_lost": "lost", "line_resting": "resting",
+               "line_no_internet": "has no internet"}
+
+
+def _line_announcer(kind: str, **data) -> None:
+    """Say on the terminal when a line is ready, lost, resting or has no internet."""
+    if kind in _LINE_WORDS:
+        note = f" ({data['note']})" if data.get("note") and kind != "line_ready" else ""
+        print(f"\nInternet line {data.get('line')} {_LINE_WORDS[kind]}{note}", file=sys.stderr)
 
 
 def _run_and_finish(app: App, session_id: str, locator, store,
                     overwrite_reason: str | None) -> int:
     control = RunControl()
-    manager = UploadManager(app.settings, app.sessions, store, _progress_printer())
-    with _Signals(control):
-        result: RunResult = manager.run(session_id, locator, control, overwrite_reason)
+    lines = app.lines(on_event=_line_announcer)
+    if lines is not None:
+        lines.refresh()
+        print(render.render_lines(lines.view()), file=sys.stderr)
+        lines.start()
+    manager = UploadManager(app.settings, app.sessions, store, _progress_printer(lines),
+                            lines=lines)
+    try:
+        with _Signals(control):
+            result: RunResult = manager.run(session_id, locator, control, overwrite_reason)
+    finally:
+        if lines is not None:
+            lines.stop()
     print(file=sys.stderr)
+    if lines is not None:
+        print(render.render_lines(lines.view(), totals=True), file=sys.stderr)
     status, paths = app.finalizer(store).finalize(result)
     print(render.render_report(app.reports().build(session_id)))
     if result.abort_reason:

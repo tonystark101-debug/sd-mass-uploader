@@ -38,6 +38,8 @@ class FakeGcsState:
         self.fail_on_chunk: set[int] = set()
         self.auth_headers: list[str | None] = []  # Authorization header of every request.
         self.upload_delay = 0.0  # Seconds to wait in every upload request (slow network).
+        self.client_ips: list[str] = []  # Source address of every request (which line).
+        self.upload_ips: dict[str, set[str]] = {}  # Object name -> source addresses that sent it.
 
     def store(self, name: str, data: bytes, meta: dict) -> dict:
         self.generation += 1
@@ -84,6 +86,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self.state.auth_headers.append(self.headers.get("Authorization"))
+        self.state.client_ips.append(self.client_address[0])
         url = urlparse(self.path)
         query = parse_qs(url.query)
         if url.path.endswith("/iam/testPermissions"):
@@ -113,6 +116,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self.state.auth_headers.append(self.headers.get("Authorization"))
+        self.state.client_ips.append(self.client_address[0])
         if self.state.upload_delay:
             time.sleep(self.state.upload_delay)
         url = urlparse(self.path)
@@ -148,6 +152,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(400, "CRC mismatch")
             return
         record = self.state.store(name, data, meta)
+        self.state.upload_ips.setdefault(name, set()).add(self.client_address[0])
         if self.state.lose_next_response:
             self.state.lose_next_response -= 1
             self._error(503, "response lost")
@@ -165,6 +170,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         self.state.auth_headers.append(self.headers.get("Authorization"))
+        self.state.client_ips.append(self.client_address[0])
         url = urlparse(self.path)
         session_id = parse_qs(url.query).get("upload_id", [""])[0]
         body = self._body()

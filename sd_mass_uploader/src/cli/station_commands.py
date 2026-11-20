@@ -80,6 +80,11 @@ def cmd_station(app: App, args: argparse.Namespace) -> int:
         if args.manual_start:
             payload["auto_upload"] = False
         return _send(app, "open", payload)
+    if action == "packet":
+        payload = {"code": args.code, "cards_counted": args.cards, "note": args.note or ""}
+        if args.manual_start:
+            payload["auto_upload"] = False
+        return _send(app, "open_packet", payload)
     if action == "close":
         return _send(app, "close", {"force": args.force}, wait=args.wait)
     if action in {"pause", "resume", "start", "confirm", "retry"}:
@@ -164,6 +169,9 @@ def render_station(state: dict, poll_seconds: float) -> str:
             label = card["card_id"] + (f" ({card['label']})" if card.get("label") else "")
             lines.append(f"{label[:28]:<28} {card['state']:<22} {files:>13} {size:>21}  "
                          f"{card.get('reason') or ''}")
+    network = state.get("network") or {}
+    if network.get("enabled"):
+        lines += ["", render.render_lines(network)]
     lines += _destination_lines(state.get("destination") or {})
     problems = state.get("problems") or []
     if problems:
@@ -527,6 +535,13 @@ def add_station_parsers(commands) -> None:
     opener.add_argument("--metadata-file", required=True)
     opener.add_argument("--manual-start", action="store_true",
                         help="Wait for `station start CARD` instead of uploading at once")
+    packet = actions.add_parser(
+        "packet", help="Open a session from a vendor platform packet: cards in, count, code")
+    packet.add_argument("code", help="The code written on the packet, e.g. FVGPA3451K")
+    packet.add_argument("--cards", type=int, required=True,
+                        help="How many cards you put in (the station checks it sees them all)")
+    packet.add_argument("--note", help="Why to go on when the counts do not match")
+    packet.add_argument("--manual-start", action="store_true")
     closer = actions.add_parser("close", help="End the session and write reports")
     closer.add_argument("--force", action="store_true", help="Even with unfinished cards")
     closer.add_argument("--wait", type=float, default=600.0,

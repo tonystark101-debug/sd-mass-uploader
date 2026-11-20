@@ -37,6 +37,25 @@ upload:
   # Keep personal data out of object metadata unless approved.
   object_metadata_fields: ["project_name", "activity_name", "recording_date"]
 
+# Several internet lines at once. Every line with its own route to the internet is found by
+# itself (checked every rescan_seconds), tested with a real connection to Google, and given
+# workers_per_line uploads. Plug in a line and it joins within seconds; pull one and its files
+# move to the others without using a retry. `python main.py lines` lists them.
+network:
+  enabled: true
+  # 0 = use every working line. A number caps it; extra lines wait as spares.
+  max_lines: 0
+  workers_per_line: 4
+  # Memory is about max_total_workers x upload.chunk_size_mib (16 x 64 MiB = 1 GiB).
+  max_total_workers: 16
+  rescan_seconds: 5
+  rest_seconds: 60
+  probe_url: "https://storage.googleapis.com/"
+  # Spots two cables that share one internet line. "" turns it off.
+  public_ip_url: "https://1.1.1.1/cdn-cgi/trace"
+  exclude_interfaces: ["lo", "docker*", "br-*", "virbr*", "veth*", "tun*", "tap*", "wg*",
+                       "tailscale*", "zt*", "vEthernet*", "*VPN*", "Loopback*"]
+
 metadata:
   require_operator_name: true
   require_place_of_recording: true

@@ -16,7 +16,13 @@ from typing import Protocol
 
 from src.core.exceptions import DeviceDetectionError, ReadOnlyViolation
 
-ALLOWED_PROGRAMS = frozenset({"powershell", "lsblk", "lsusb", "findmnt", "udisksctl"})
+ALLOWED_PROGRAMS = frozenset({"powershell", "lsblk", "lsusb", "findmnt", "udisksctl", "ip"})
+
+# `ip` (iproute2) may only list routes and addresses, to find the internet lines. Exactly these.
+IP_READ_ONLY_COMMANDS = (
+    ("-j", "-4", "route", "show", "default"),
+    ("-j", "-4", "addr", "show"),
+)
 
 # udisksctl may only mount, and only read-only. Unmount, power-off and every other verb are refused.
 READ_ONLY_MOUNT_OPTION = "ro"
@@ -50,6 +56,8 @@ def assert_read_only(argv: list[str]) -> None:
         raise ReadOnlyViolation(f"Command is not on the read-only allowlist: {argv[0]}")
     if program == "udisksctl":
         _assert_read_only_mount(argv)
+    if program == "ip" and tuple(argv[1:]) not in IP_READ_ONLY_COMMANDS:
+        raise ReadOnlyViolation(f"Only listing routes and addresses is allowed: {argv}")
 
 
 def _assert_read_only_mount(argv: list[str]) -> None:

@@ -137,6 +137,48 @@ def render_progress(view: ProgressView) -> str:
             f"{view.elapsed_seconds:.0f}s")
 
 
+_LINE_STATES = {"active": "working", "checking": "checking", "no_internet": "NO INTERNET",
+                "resting": "resting", "spare": "spare", "gone": "unplugged"}
+_LINE_MODES = {"multi": "uploading on {n} lines at once", "single": "uploading on 1 line",
+               "default": "no working line found yet: using the computer's default connection",
+               "off": "several lines switched off (network.enabled): default connection only"}
+
+
+def render_lines(network: dict, totals: bool = False) -> str:
+    """The internet lines table: one row per line, then the total."""
+    rows = [f"INTERNET LINES  {_LINE_MODES[network['mode']].format(n=network['working'])}  |  "
+            f"total {network['total_mbit_per_s']:g} Mbit/s ({network['total_mb_per_s']:g} MB/s)"
+            f"  |  {network['capacity']} files at once"]
+    if network.get("error"):
+        rows.append(f"  Could not read the connections: {network['error']}")
+    if network["lines"]:
+        rows.append(f"  {'Line':<20} {'Type':<9} {'Address':<16} {'Public':<16} "
+                    f"{'State':<12} {'Uploads':>7} {'Mbit/s':>8}"
+                    + (f" {'Sent':>10} {'Files':>6}" if totals else "") + "  Note")
+    for line in network["lines"]:
+        note = line.get("note") or ""
+        if line.get("shares_with"):
+            note = f"same internet as {line['shares_with']}: adds no speed. {note}"
+        uploads = f"{line['uploads']}/{line['slots']}" if line["slots"] else str(line["uploads"])
+        row = (f"  {line['name'][:20]:<20} {line['kind']:<9} {line['ip']:<16} "
+               f"{(line.get('public_ip') or '?'):<16} "
+               f"{_LINE_STATES.get(line['state'], line['state']):<12} {uploads:>7} "
+               f"{line['mbit_per_s']:>8g}")
+        if totals:
+            row += f" {human_bytes(line['sent_bytes']):>10} {line['files_done']:>6}"
+        rows.append(f"{row}  {note}".rstrip())
+    return "\n".join(rows)
+
+
+def render_lines_short(network: dict) -> str:
+    """For the live progress display: each working line's speed, then the total."""
+    parts = [f"{line['name']} {line['mbit_per_s']:g}" for line in network["lines"]
+             if line["state"] == "active"]
+    prefix = " + ".join(parts) + " = " if len(parts) > 1 else ""
+    return (f"{prefix}{network['total_mbit_per_s']:g} Mbit/s on "
+            f"{max(network['working'], 1)} line(s)")
+
+
 def render_report(report: dict) -> str:
     def measured(value: object, suffix: str = "") -> str:
         return "not measured" if value is None else f"{value}{suffix}"

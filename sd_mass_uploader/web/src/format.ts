@@ -100,6 +100,12 @@ export function describeEvent(kind: string, data: Record<string, unknown>): stri
     case "card_retry": return `${card}: ${data.files} file(s) queued again`;
     case "problem_opened": return `Problem: ${data.title}`;
     case "problem_resolved": return `Resolved: ${data.code}`;
+    case "line_ready": return `Internet line ${data.line} ready (${data.kind_of_line})`;
+    case "line_lost": return `Internet line ${data.line} unplugged: its files moved to the others`;
+    case "line_changed": return `Internet line ${data.line} got a new address`;
+    case "line_resting": return `Internet line ${data.line} resting after network failures`;
+    case "line_no_internet": return `Internet line ${data.line} cannot reach Google`;
+    case "packet_opened": return `Packet ${data.ref} from ${data.vendor}: ${data.cards} card(s)`;
     case "engine_started": return "Uploader started";
     case "engine_stopped": return data.reason ? `Uploader stopped: ${data.reason}` : null;
     default: return null;

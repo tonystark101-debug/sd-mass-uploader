@@ -69,6 +69,45 @@ class UploadSettings:
 
 
 @dataclass
+class NetworkSettings:
+    """Upload over every internet line at once (src/network). Off: the default connection only."""
+
+    enabled: bool = True
+    max_lines: int = 0  # 0 = every working line; 2 = at most two (others wait as spares).
+    workers_per_line: int = 4  # Files uploading at once on each line.
+    max_total_workers: int = 16  # Cap across all lines. Memory: about this x chunk_size_mib.
+    rescan_seconds: float = 5  # How often new or unplugged lines are noticed (Windows: >= 10).
+    rest_seconds: float = 60  # A line with 3 network failures in a row rests this long.
+    probe_url: str = "https://storage.googleapis.com/"  # Reached through each line to test it.
+    # Learns each line's public address, to spot two cables that share one internet line.
+    # Empty turns it off.
+    public_ip_url: str = "https://1.1.1.1/cdn-cgi/trace"
+    exclude_interfaces: list[str] = field(default_factory=lambda: [
+        "lo", "docker*", "br-*", "virbr*", "veth*", "tun*", "tap*", "wg*", "tailscale*",
+        "zt*", "vEthernet*", "*VPN*", "Loopback*",
+    ])
+
+
+@dataclass
+class VendorPlatformSettings:
+    """vendor.byndfrntr.com: an operator types a packet's code and the station reads the rest."""
+
+    enabled: bool = False  # On: sessions open from a packet code (src/vendor).
+    url: str = "https://vendor.byndfrntr.com"
+    key_file: str = "data/station/secrets/vendor_station_key"  # This station's own key, 0600.
+    timeout_seconds: float = 20
+    # The vendor platform's city name -> the lake's folder name, where they differ.
+    city_aliases: dict = field(default_factory=lambda: {"vijayapura": "bijapur"})
+    # Device type on the vendor platform -> devices the cards may hold (src/peakai/devices.py).
+    # A card holding a different device waits for a person. Types not listed are not checked.
+    device_kinds: dict = field(default_factory=lambda: {
+        "GI Lab": ["GI Labs EGO1GS"],
+        "E2": ["E2 stereo"],
+        "Build Stereo": ["BuildAI stereo (encrypted)"],
+    })
+
+
+@dataclass
 class MetadataSettings:
     require_operator_name: bool = True
     require_place_of_recording: bool = True
@@ -161,6 +200,8 @@ class Settings:
     file_scanning: FileScanningSettings = field(default_factory=FileScanningSettings)
     google_cloud: GoogleCloudSettings = field(default_factory=GoogleCloudSettings)
     upload: UploadSettings = field(default_factory=UploadSettings)
+    network: NetworkSettings = field(default_factory=NetworkSettings)
+    vendor_platform: VendorPlatformSettings = field(default_factory=VendorPlatformSettings)
     metadata: MetadataSettings = field(default_factory=MetadataSettings)
     station: StationSettings = field(default_factory=StationSettings)
     api: ApiSettings = field(default_factory=ApiSettings)
@@ -219,6 +260,8 @@ def _coerce(value: Any, default: Any, where: str) -> Any:
         return value
     if isinstance(default, list) and not isinstance(value, list):
         raise ConfigurationError(f"{where} must be a list")
+    if isinstance(default, dict) and not isinstance(value, dict):
+        raise ConfigurationError(f"{where} must be a mapping")
     if isinstance(default, str) and not isinstance(value, str):
         raise ConfigurationError(f"{where} must be text")
     return value
@@ -234,6 +277,17 @@ def validate(settings: Settings) -> None:
         raise ConfigurationError("upload.chunk_size_mib must be a multiple of 256 KiB")
     if upload.backoff_initial_seconds <= 0 or upload.backoff_max_seconds <= 0:
         raise ConfigurationError("upload backoff values must be positive")
+    network = settings.network
+    if network.max_lines < 0:
+        raise ConfigurationError("network.max_lines cannot be negative (0 means every line)")
+    if network.workers_per_line < 1 or network.max_total_workers < 1:
+        raise ConfigurationError("network.workers_per_line and max_total_workers must be >= 1")
+    if network.rescan_seconds < 1 or network.rest_seconds <= 0:
+        raise ConfigurationError("network.rescan_seconds must be >= 1 and rest_seconds > 0")
+    vendor = settings.vendor_platform
+    if vendor.enabled and not vendor.url.startswith(("https://", "http://127.0.0.1",
+                                                      "http://localhost")):
+        raise ConfigurationError("vendor_platform.url must be https (or a local test address)")
     if settings.device_detection.scan_interval_seconds < 1:
         raise ConfigurationError("device_detection.scan_interval_seconds must be at least 1")
     station = settings.station

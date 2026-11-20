@@ -16,7 +16,9 @@ IST = timezone(timedelta(hours=5, minutes=30), "IST")  # India has no daylight s
 _SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _PHONE = re.compile(r"(?:\+?\d[\s\-().]*){10,}")  # Ten or more digits, however written.
 _FIELDS = ("activity", "city", "vendor_name", "site", "batch", "recorded_from", "recorded_to",
-           "video_hours", "city_unknown_confirmed")
+           "video_hours", "city_unknown_confirmed", "packet", "packet_device")
+# A vendor platform packet: its code and when it was sent (src/vendor), e.g. FVGPA3451K-061126-1430.
+_PACKET = re.compile(r"^[A-Z]{5}\d{4}[A-Z](-\d{6}-\d{4}(-\d{1,2})?)?$")
 
 
 def now_ist() -> datetime:
@@ -89,7 +91,13 @@ def validate_session(raw: dict, pack: PackSettings,
         "recorded_from": _day(raw, "recorded_from"),
         "recorded_to": _day(raw, "recorded_to"),
         "video_hours": "",
+        # Not run through the phone-number check: a packet reference is digits by design.
+        "packet": str(raw.get("packet") or "").strip().upper(),
+        "packet_device": _text(raw, "packet_device", False, 60),
     }
+    if details["packet"] and not _PACKET.fullmatch(details["packet"]):
+        raise MetadataValidationError("packet must be a vendor platform packet reference like "
+                                      "FVGPA3451K-061126-1430")
     if details["recorded_from"] and details["recorded_to"] \
             and details["recorded_from"] > details["recorded_to"]:
         raise MetadataValidationError("recorded_from is after recorded_to")
@@ -158,6 +166,7 @@ def info_document(*, pass_name: str, folder: str, vendor_code: str, details: dic
         "city": details["city"],
         "site": details.get("site", ""),
         "batch": details.get("batch", ""),
+        "packet": details.get("packet", ""),  # The vendor platform packet the card came in.
         "upload_date": details["upload_date"],
         "recorded_from": recorded_from or details.get("recorded_from") or None,
         "recorded_to": recorded_to or details.get("recorded_to") or None,
@@ -171,6 +180,7 @@ def info_document(*, pass_name: str, folder: str, vendor_code: str, details: dic
     }
     for key, value in document.items():
         if isinstance(value, str) and contains_phone_number(value) and key not in (
-                "folder", "upload_date", "recorded_from", "recorded_to", "written_at"):
+                "folder", "upload_date", "recorded_from", "recorded_to", "written_at",
+                "packet"):
             raise MetadataValidationError(f"_info {key} looks like it holds a phone number")
     return document

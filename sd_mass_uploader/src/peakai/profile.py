@@ -23,6 +23,7 @@ from src.core.models import Card, ScanSummary
 from src.core.settings import Settings
 from src.database.peakai_repository import PeakAiRepository
 from src.database.repositories import ScanRepository, SessionRepository
+from src.database.vendor_repository import VendorPacketRepository
 from src.metadata.session import new_session_id
 from src.peakai.devices import (
     DEVICE_NAMES,
@@ -48,6 +49,8 @@ from src.peakai.session import (
 from src.peakai.store import PeakAiStore
 from src.platform.paths import open_source_readonly, to_extended_path
 from src.station.profile import QueueOutcome, SessionCreated
+from src.vendor.client import VendorPlatform
+from src.vendor.packet import expected_devices
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,9 @@ class PeakAiProfile:
     def __init__(self, settings: Settings, pack: PackSettings, keeper: PassKeeper,
                  store: PeakAiStore, sessions: SessionRepository, scans: ScanRepository,
                  repo: PeakAiRepository, key_loader: Callable[[], str],
-                 http: Http = urllib_http, clock: Callable[[], float] = time.time) -> None:
+                 http: Http = urllib_http, clock: Callable[[], float] = time.time,
+                 vendor: VendorPlatform | None = None,
+                 packets: VendorPacketRepository | None = None) -> None:
         self._settings = settings
         self.pack = pack
         self.keeper = keeper
@@ -80,6 +85,9 @@ class PeakAiProfile:
         self._http = http
         self._clock = clock
         self._machine = machine_name(settings.peakai.machine_name)
+        # The vendor platform: sessions open from a packet code (None: typed details).
+        self.vendor = vendor
+        self.packets = packets
         self._lock = threading.Lock()
         # Object metadata: the session's activity, city and day (never vendor or people).
         settings.upload.object_metadata_fields = ["activity", "city", "upload_date"]
@@ -186,6 +194,7 @@ class PeakAiProfile:
             reasons.append("this laptop's PeakAI passes could not be fetched yet; "
                            "retry when online")
         reasons += choose_passes(result, self.keeper.usable_passes())
+        reasons += self._packet_device_reasons(session_id, result)
         if result.unplaced and not decision.get("skip"):
             sample = ", ".join(result.unplaced[:3])
             reasons.append(f"{len(result.unplaced)} file(s) match no known device (for example "
@@ -205,6 +214,19 @@ class PeakAiProfile:
                 (path, "SKIPPED_BY_OPERATOR", "the operator chose not to upload it")
                 for path in result.unplaced])
         return self._queue_tasks(session_id, card_id, plan, rows, result, serial)
+
+    def _packet_device_reasons(self, session_id: str, result: Classification) -> list[str]:
+        """The packet says which device recorded it; a card holding another one waits."""
+        details = self._sessions.metadata(session_id)
+        kind = details.get("packet_device")
+        allowed = expected_devices(kind, self._settings.vendor_platform) if kind else None
+        if not allowed:
+            return []
+        other = sorted({group.device for group in result.groups} - set(allowed))
+        if not other:
+            return []
+        return [f"the packet is {kind} footage ({' or '.join(allowed)}), but this card holds "
+                f"{', '.join(other)}. Check it is from this packet; if it is, choose the device"]
 
     def _usable_known(self) -> bool:
         if self.keeper.status()["allowed"] is None:
@@ -253,6 +275,7 @@ class PeakAiProfile:
         try:
             self._write_infos(session_id)
             self._report(session_id)
+            self._report_packet(session_id)
         except UploaderError as exc:
             logger.warning("PeakAI housekeeping: %s", exc)
         finally:
@@ -375,8 +398,77 @@ class PeakAiProfile:
                                      f"FAILED, nothing recorded: {error}",
                                      self._clock() + RETRY_SECONDS)
 
+    # ------------------------------------------------------------------ vendor platform packet
+
+    def packet_totals(self, session_id: str, cards_detected: int) -> dict | None:
+        """What the station uploaded for the packet, once every card is done; else None.
+
+        Done means: at least as many cards as were plugged in at the start are placed, and every
+        part of every card is verified in the bucket. Hours are measured on the cards."""
+        records = self._repo.cards(session_id)
+        if len(records) < cards_detected or any(r["held_reason"] for r in records):
+            return None
+        parts = [(r, g) for r in records for g in r["plan"]["groups"] if "folder" in g]
+        if not parts or not all(self._part_complete(session_id, r["card_id"], g)
+                                for r, g in parts):
+            return None
+        hours = [g["hours"] for _, g in parts]
+        unknown = sum(1 for value in hours if value is None)
+        measured = round(sum(value for value in hours if value is not None), 2)
+        note = ""
+        if unknown:
+            # Encrypted or .mcap footage has no readable length. Reporting only what was
+            # measured would under-count, and the platform never lets pre-QC pass more hours
+            # than were uploaded; so the vendor's declared hours stand in, and the note says so.
+            declared = self._sessions.metadata(session_id).get("video_hours")
+            declared = float(declared) if declared not in (None, "") else None
+            if declared is not None and declared > measured:
+                note = (f"video length unreadable on {unknown} of {len(parts)} part(s) "
+                        f"(encrypted or .mcap): the vendor's declared {declared:g} h is "
+                        f"reported; {measured:g} h measured")
+                measured = round(declared, 2)
+            else:
+                note = (f"video length unreadable on {unknown} of {len(parts)} part(s) "
+                        "(encrypted or .mcap); not counted")
+        return {"hours": measured,
+                "cards_uploaded": len(records),
+                "files": sum(g["files"] for _, g in parts),
+                "bytes": sum(g["bytes"] for _, g in parts),
+                "note": note}
+
+    def _report_packet(self, session_id: str) -> None:
+        if self.vendor is None or self.packets is None:
+            return
+        row = self.packets.get(session_id)
+        if row is None or (row["last_error"] and row["next_try"] > self._clock()):
+            return
+        ref = row["ref"]
+        if not row["started_at"]:
+            try:
+                self.vendor.start(ref, row["cards_detected"], row["cards_counted"], row["note"])
+            except UploaderError as exc:
+                self.packets.started(session_id, f"Telling the vendor platform it started: "
+                                     f"{exc}", self._clock() + RETRY_SECONDS)
+                return
+            self.packets.started(session_id, None)
+        totals = self.packet_totals(session_id, row["cards_detected"])
+        if totals is None or totals == row["uploaded"]:
+            return  # Not finished yet, or the platform already has exactly this.
+        try:
+            self.vendor.uploaded(ref, totals["hours"], totals["cards_uploaded"], totals["files"],
+                                 totals["bytes"], totals["note"])
+        except UploaderError as exc:
+            self.packets.uploaded(session_id, totals, f"Telling the vendor platform it is "
+                                  f"uploaded: {exc}", self._clock() + RETRY_SECONDS)
+            return
+        self.packets.uploaded(session_id, totals, None)
+        logger.info("Vendor platform: packet %s uploaded, %s h on %s card(s)", ref,
+                    totals["hours"], totals["cards_uploaded"])
+
     def retry_reports(self, session_id: str) -> None:
         self._repo.clear_retry_delays(session_id)
+        if self.packets is not None:
+            self.packets.clear_delay(session_id)
 
     # ------------------------------------------------------------------ views
 
@@ -406,6 +498,10 @@ class PeakAiProfile:
             if info["last_error"] and not info["written_at"]:
                 found.append({"code": "E-PEAKAI-INFO", "card_id": info["card_id"],
                               "detail": info["last_error"]})
+        packet = self.packets.get(session_id) if self.packets is not None else None
+        if packet and packet["last_error"]:
+            found.append({"code": "E-VENDOR-REPORT", "subject": packet["ref"],
+                          "detail": f"{packet['ref']}: {packet['last_error']}"})
         for report in self._repo.reports(session_id):
             if report["last_error"]:
                 found.append({"code": "E-PEAKAI-REPORT", "subject": report["pass_name"],
@@ -429,6 +525,7 @@ class PeakAiProfile:
                      "activities": pack.activities, "documents": pack.documents},
             "devices": {device: list(passes) for device, passes in DEVICE_PASSES.items()},
             "keeper": self.keeper.status(),
+            "vendor_platform": self.vendor is not None,
         }
         if session_id is not None:
             result["cards"] = {
@@ -442,6 +539,11 @@ class PeakAiProfile:
                 {key: row[key] for key in ("pass_name", "status", "sent_at", "last_error")}
                 | {"response": (row["response_text"] or "")[:500]}
                 for row in self._repo.reports(session_id)]
+            packet = self.packets.get(session_id) if self.packets is not None else None
+            if packet is not None:
+                result["packet"] = {key: packet[key] for key in (
+                    "ref", "packet", "cards_detected", "cards_counted", "note", "started_at",
+                    "uploaded_at", "uploaded", "last_error")}
             result["infos"] = [
                 {key: row[key] for key in ("card_id", "pass_name", "object_name", "written_at",
                                            "last_error")}

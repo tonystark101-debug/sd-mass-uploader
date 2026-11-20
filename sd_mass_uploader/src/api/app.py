@@ -78,6 +78,14 @@ class ApiServices:
 
 # ------------------------------------------------------------------ request bodies
 
+class PacketRequest(BaseModel):
+    code: str = Field(description="The packet code written on the packet, e.g. FVGPA3451K or "
+                                  "FVGPA3451K-061126-1430")
+    cards_counted: int = Field(ge=0, le=1000, description="Cards the operator put in")
+    note: str = Field("", max_length=300, description="Why to go on when the counts differ")
+    auto_upload: bool | None = None
+
+
 class OpenSessionRequest(BaseModel):
     metadata: dict[str, Any] = Field(
         description="activity_name, recording_date (YYYY-MM-DD), project_name, "
@@ -244,6 +252,17 @@ def create_app(services: ApiServices) -> FastAPI:
     def open_session(body: OpenSessionRequest) -> dict:
         """Open a session. Cards already inserted, and every card inserted later, join it."""
         return {"session_id": station.open_session(body.metadata, body.auto_upload)}
+
+    @app.post("/api/v1/packet/preview", tags=["session"], dependencies=auth)
+    def packet_preview(body: PacketRequest) -> dict:
+        """The vendor platform packet for a code, and how its card count compares."""
+        return station.packet_preview(body.code, body.cards_counted)
+
+    @app.post("/api/v1/packet/open", tags=["session"], dependencies=auth, status_code=201)
+    def packet_open(body: PacketRequest) -> dict:
+        """Open the session from the packet: no other questions."""
+        return {"session_id": station.open_packet_session(body.code, body.cards_counted,
+                                                          body.note, body.auto_upload)}
 
     @app.post("/api/v1/session/close", tags=["session"], dependencies=auth)
     def close_session(body: CloseSessionRequest) -> dict:

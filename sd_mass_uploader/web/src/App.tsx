@@ -8,6 +8,7 @@ import { AiPanel } from "./ai";
 import { api, useStation, type Connection } from "./api";
 import { CardDrawer, CardTile } from "./cards";
 import { bytes, clock, describeEvent, duration, look, percent } from "./format";
+import { LinesPanel, speedText } from "./lines";
 import { HardwarePage, HistoryPage, SetupPage } from "./pages";
 import { ProblemList, type ProblemHandlers } from "./problems";
 import { StartSession } from "./session";
@@ -177,8 +178,19 @@ function Dashboard({ state, events, handlers, urgentCount, onOpenCard, onProblem
           <span>{bytes(progress.bytes_done)} of {bytes(progress.bytes_total)}</span>
           <span>{progress.files_done ?? 0} of {progress.files_total ?? 0} files</span>
           <span>{progress.current_mb_per_s ?? 0} MB/s now</span>
+          {state.network?.enabled && state.network.working > 0 && (
+            <span title="Internet upload speed over every line">
+              {speedText(state.network.total_mbit_per_s)} on {state.network.working}
+              {state.network.working === 1 ? " line" : " lines"}</span>
+          )}
           <span>{progress.eta_seconds ? `about ${duration(progress.eta_seconds)} left`
                                       : "time left unknown"}</span>
+          {state.destination.packet && (
+            <span className="badge tone-blue" title="The vendor platform packet these cards came in">
+              Packet {state.destination.packet.ref} · {state.destination.packet.packet.vendor}
+              {state.destination.packet.uploaded_at ? " · reported uploaded" : ""}
+            </span>
+          )}
           {session.paused_all && <span className="tone-amber badge">Everything paused</span>}
         </div>
       </section>
@@ -204,6 +216,7 @@ function Dashboard({ state, events, handlers, urgentCount, onOpenCard, onProblem
           )}
         </section>
         <aside className="side">
+          <LinesPanel network={state.network} />
           <div className="section-head">
             <h2>Problems {urgentCount > 0 && <span className="badge tone-red">{urgentCount}</span>}</h2>
             {state.problems.length > 3 && (

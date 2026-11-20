@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import cached_property
 
 from src.core.exceptions import ConfigurationError, DatabaseError
@@ -12,6 +13,8 @@ from src.database.repositories import InventoryRepository, ScanRepository, Sessi
 from src.device_manager.base import PlatformAdapter
 from src.device_manager.detector import create_adapter
 from src.inventory.inventory_service import ScanService
+from src.network import discovery
+from src.network.lines import LinePool
 from src.reporting.report_generator import ReportGenerator
 from src.uploader.finalize import SessionFinalizer
 from src.uploader.gcs_client import GcsObjectStore, ObjectStore
@@ -54,6 +57,19 @@ class App:
 
     def scan_service(self) -> ScanService:
         return ScanService(self.scans, self.settings.file_scanning)
+
+    def lines(self, on_event=None) -> LinePool | None:
+        """The internet-line pool, or None when uploads use the default connection only.
+
+        Off when network.enabled is false, on systems without line support, and against a
+        local storage emulator (STORAGE_EMULATOR_HOST), which no internet line can reach.
+        """
+        network = self.settings.network
+        emulator = bool(os.environ.get("STORAGE_EMULATOR_HOST"))
+        if not network.enabled or not discovery.supported() or emulator:
+            return None
+        return LinePool(network, fallback_workers=self.settings.upload.max_workers,
+                        on_event=on_event)
 
     def store(self) -> ObjectStore:
         self.settings.require_gcs()

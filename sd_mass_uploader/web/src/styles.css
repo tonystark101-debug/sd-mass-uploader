@@ -285,3 +285,43 @@ textarea { width: 100%; resize: vertical; }
 .notice-bad { background: var(--red-bg); color: var(--red); }
 
 @media (prefers-reduced-motion: reduce) { .bar-fill, .spin { transition: none; animation: none; } }
+
+/* Internet lines (lines.tsx) */
+.lines { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.75rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); }
+.lines h2 { display: inline-flex; align-items: center; gap: 0.4rem; }
+.lines p { margin: 0; }
+.lines-total { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.line-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+  gap: 0.6rem; }
+.line-row { display: flex; flex-direction: column; gap: 0.25rem; padding-top: 0.5rem;
+  border-top: 1px solid var(--border); }
+.line-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.line-head .badge, .line-head .pill { margin-left: auto; }
+.line-speed { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.6rem; }
+.line-mbit { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 7.5rem;
+  text-align: right; }
+
+/* New packet (packet.tsx) */
+.packet-start .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+  gap: 0.9rem; counter-reset: step; }
+.packet-start .steps > li { counter-increment: step; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 0.6rem; padding: 0.8rem 0.9rem 0.8rem 3rem; border: 1px solid var(--border);
+  border-radius: var(--radius); position: relative; opacity: 0.6; }
+.packet-start .steps > li::before { content: counter(step); position: absolute; left: 0.9rem; top: 0.8rem;
+  width: 1.5rem; height: 1.5rem; border-radius: 99px; display: grid; place-items: center;
+  background: var(--surface-2); font-weight: 700; }
+.packet-start .steps > li.now { opacity: 1; border-color: var(--primary); }
+.packet-start .steps > li.done { opacity: 1; }
+.packet-start .steps > li.done::before { content: "\2713"; background: var(--green-bg); color: var(--green); }
+.packet-start .steps p { margin: 0; flex-basis: 100%; }
+.big-count { font-size: 2rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.count-input { max-width: 8rem; font-size: 1.4rem; }
+.code-input { max-width: 20rem; font-size: 1.3rem; letter-spacing: 0.08em; text-transform: uppercase;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.packet-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0.5rem 0 0.8rem; }
+.packet-facts dt { font-weight: 600; color: var(--muted); }
+.packet-facts dd { margin: 0; }
+.problems-list { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+.tone-green { color: var(--green); }
