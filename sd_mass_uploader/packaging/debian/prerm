@@ -1,0 +1,18 @@
+#!/bin/sh
+# Before removal: stop the station (files in progress finish first), leave kiosk mode.
+set -e
+APP=/opt/sd-mass-uploader
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop sdu-daemon.service || true
+      systemctl disable sdu-daemon.service >/dev/null 2>&1 || true
+      if [ -f /etc/systemd/system/sdu-kiosk.service ]; then
+        bash "$APP/scripts/ubuntu/kiosk.sh" disable || true
+      fi
+    fi
+    rm -rf "$APP/venv"
+    find "$APP" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    ;;
+esac
+exit 0

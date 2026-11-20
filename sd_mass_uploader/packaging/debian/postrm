@@ -1,0 +1,13 @@
+#!/bin/sh
+# After removal. Data is kept unless the package is purged. The `sdu` user is kept, so files
+# it owns elsewhere keep a valid owner; remove it with `sudo deluser sdu` if wanted.
+set -e
+case "$1" in
+  purge)
+    rm -rf /var/lib/sd-mass-uploader /var/log/sd-mass-uploader
+    ;;
+esac
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload || true
+fi
+exit 0

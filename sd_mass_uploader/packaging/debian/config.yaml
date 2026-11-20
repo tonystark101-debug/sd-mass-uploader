@@ -1,0 +1,103 @@
+# SD Mass Uploader station: installed settings. Keep your changes here; package upgrades
+# keep this file (dpkg asks if both changed). Then: sudo systemctl restart sdu-daemon
+# PeakAI stations: import the pack (Setup screen, or sudo -u sdu sdu pack import <zip>)
+# and set peakai.vendor_code below.
+# Non-secret configuration only. Never put keys or credentials here.
+# Worker and chunk values are starting points; tune them with `benchmark`.
+application:
+  name: "SD Mass Uploader"
+  environment: "production"
+  log_level: "INFO"
+
+device_detection:
+  scan_interval_seconds: 5
+  detect_usb_topology: true
+  include_unmounted_storage: true
+  inventory_stale_seconds: 300
+
+file_scanning:
+  follow_symlinks: false
+  calculate_sha256: false
+  ignore_hidden_files: false
+  exclude_dirs: ["System Volume Information", "$RECYCLE.BIN"]
+
+google_cloud:
+  project_id: "REPLACE_WITH_PROJECT_ID"
+  bucket_name: "REPLACE_WITH_BUCKET_NAME"
+  root_prefix: "uploads"
+
+upload:
+  max_workers: 4
+  chunk_size_mib: 64
+  max_retries: 5
+  backoff_initial_seconds: 2
+  backoff_max_seconds: 60
+  request_timeout_seconds: 120
+  # fail: stop that file and ask the operator. new_path: upload beside it.
+  duplicate_policy: "fail"
+  # Also needs `upload --allow-overwrite --overwrite-reason "..."`.
+  overwrite_existing: false
+  verify_after_upload: true
+  # Keep personal data out of object metadata unless approved.
+  object_metadata_fields: ["project_name", "activity_name", "recording_date"]
+
+metadata:
+  require_operator_name: true
+  require_place_of_recording: true
+
+# The always-on service: `python main.py daemon`.
+station:
+  poll_seconds: 2
+  # New sessions start each card as soon as it is scanned. Can be switched per session.
+  auto_upload: true
+  # Mount new cards read-only through udisks2 (Linux). Never read-write.
+  auto_mount: true
+  mount_filesystems: ["vfat", "exfat"]
+  mount_options: "ro,noatime,nosuid,nodev,noexec"
+  # Set to a folder to test without hardware: each sub-folder acts as a card.
+  simulator_dir: ""
+  state_file: "/var/lib/sd-mass-uploader/station/state.json"
+  lock_file: "/var/lib/sd-mass-uploader/station/station.lock"
+
+# Local API for the console and CLI. Loopback only; every request needs the token in token_file.
+api:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8765
+  unix_socket: ""
+  token_file: "/var/lib/sd-mass-uploader/station/api-token"
+
+# AI troubleshooter (Claude). Put the key in the environment as ANTHROPIC_API_KEY, never here.
+# Diagnosis runs on its own; any shell command needs operator approval; card writes are blocked.
+ai:
+  enabled: true
+  model: "claude-opus-5-5"
+  effort: "high"
+  max_iterations: 25
+  token_budget: 400000
+  command_timeout_seconds: 60
+  approval_timeout_seconds: 600
+  auto_station_actions: true
+  redact_personal: true
+
+# PeakAI uploads. Turned on by importing PeakAI's zip: python main.py pack import <zip>
+# The pack sets the bucket, token service, passes and folder rules. The laptop key goes to
+# key_file (never into this file).
+peakai:
+  pack_dir: "/var/lib/sd-mass-uploader/pack"
+  key_file: "/var/lib/sd-mass-uploader/secrets/laptop_key"
+  vendor_code: ""
+  machine_name: ""
+
+database:
+  path: "/var/lib/sd-mass-uploader/database/uploader.db"
+
+reporting:
+  directory: "/var/lib/sd-mass-uploader/reports"
+  json: true
+  csv: true
+
+logging:
+  directory: "/var/log/sd-mass-uploader"
+  max_bytes: 10485760
+  backup_count: 5

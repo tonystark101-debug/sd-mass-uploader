@@ -1,0 +1,9 @@
+{
+  "activity_name": "Field Survey",
+  "place_of_recording": "Bengaluru",
+  "recording_date": "2026-11-06",
+  "operator_name": "Operator 01",
+  "project_name": "Project Alpha",
+  "description": "Sample only. Replace every value.",
+  "custom": {"camera_group": "A"}
+}

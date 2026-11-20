@@ -1,0 +1,7 @@
+#!/bin/sh
+# SD Mass Uploader command line, using the installed settings.
+#   sdu console                 Open the Operator Console (members of group sdu)
+#   sdu station status          Live counts
+#   sudo -u sdu sdu pack import <zip>   Commands that change station files run as the station user
+exec /opt/sd-mass-uploader/venv/bin/python /opt/sd-mass-uploader/main.py \
+  --config "${SDU_CONFIG:-/etc/sd-mass-uploader/config.yaml}" "$@"

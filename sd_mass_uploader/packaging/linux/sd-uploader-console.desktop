@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SD Uploader
+GenericName=SD card upload station
+Comment=Watch and control the SD card upload station
+Exec=/opt/sd-mass-uploader/venv/bin/python /opt/sd-mass-uploader/main.py --config /etc/sd-mass-uploader/config.yaml desktop --window
+Icon=sd-uploader
+Terminal=false
+Categories=Utility;
+Keywords=SD;card;upload;PeakAI;
+StartupNotify=true

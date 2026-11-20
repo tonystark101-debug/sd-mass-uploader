@@ -1,0 +1,45 @@
+# SD Mass Uploader station. Installed by the .deb package (Phase 7); kept here for review.
+# Paths in /etc/sd-mass-uploader/config.yaml must be absolute (database under /var/lib).
+#
+# Starts at boot, before anyone logs in. After a crash or power cut it starts again, settles
+# files that were mid-upload against the bucket, and carries on (no file is sent twice unless it
+# was in flight). If the station's loop hangs for 5 minutes, the watchdog restarts it.
+[Unit]
+Description=SD Mass Uploader station (reads SD cards read-only, uploads to GCS)
+After=network-online.target udisks2.service
+Wants=network-online.target udisks2.service
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=notify
+NotifyAccess=main
+# The first pass may wait on the network (token service, bucket); allow it time.
+TimeoutStartSec=300
+WatchdogSec=120
+User=sdu
+Group=sdu
+WorkingDirectory=/var/lib/sd-mass-uploader
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/sd-mass-uploader/credentials.json
+# PeakAI: in /etc/sd-mass-uploader/config.yaml set peakai.key_file to
+# /etc/sd-mass-uploader/laptop_key (written 0600 by `main.py pack import`).
+# AI troubleshooter key: one line `ANTHROPIC_API_KEY=...`, mode 0600, owned by root.
+# Optional (leading -): without it the AI is unavailable and everything else works.
+EnvironmentFile=-/etc/sd-mass-uploader/ai.env
+ExecStart=/opt/sd-mass-uploader/venv/bin/python /opt/sd-mass-uploader/main.py --config /etc/sd-mass-uploader/config.yaml daemon
+# Local API Unix socket: set api.unix_socket to /run/sd-mass-uploader/api.sock.
+RuntimeDirectory=sd-mass-uploader
+RuntimeDirectoryMode=0750
+Restart=always
+RestartSec=5
+# SIGTERM lets files in progress finish; a large file can take minutes.
+KillSignal=SIGTERM
+TimeoutStopSec=600
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sd-mass-uploader /var/log/sd-mass-uploader
+
+[Install]
+WantedBy=multi-user.target

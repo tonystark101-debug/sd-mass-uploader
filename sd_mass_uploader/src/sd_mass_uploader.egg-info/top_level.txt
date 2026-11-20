@@ -1,0 +1,11 @@
+__init__
+cli
+core
+database
+device_manager
+inventory
+metadata
+platform
+reporting
+uploader
+verification

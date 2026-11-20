@@ -1,0 +1,11 @@
+# Installed to /etc/xdg/autostart: the panel icon and notifications start at every login.
+[Desktop Entry]
+Type=Application
+Name=SD Uploader indicator
+Comment=Panel icon with card counts, and notifications for the SD card upload station
+Exec=/opt/sd-mass-uploader/venv/bin/python /opt/sd-mass-uploader/main.py --config /etc/sd-mass-uploader/config.yaml desktop
+Icon=sd-uploader
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

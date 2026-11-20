@@ -1,0 +1,33 @@
+# Kiosk mode: the computer boots straight into the full-screen Operator Console on the first
+# screen (tty1), with no desktop. Turned on and off by scripts/ubuntu/kiosk.sh.
+#
+# cage is a minimal Wayland compositor that shows one app full screen. -s keeps Ctrl+Alt+F2
+# working, so an administrator can still reach a text login for maintenance.
+[Unit]
+Description=SD Uploader kiosk (full-screen console on tty1)
+After=systemd-user-sessions.service plymouth-quit-wait.service sdu-daemon.service
+Wants=sdu-daemon.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+User=sdu-kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland
+ExecStart=/usr/bin/cage -d -s -- /opt/sd-mass-uploader/venv/bin/python /opt/sd-mass-uploader/main.py --config /etc/sd-mass-uploader/config.yaml desktop --window --fullscreen
+# The console waits for the station by itself; if it ever closes, show it again.
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

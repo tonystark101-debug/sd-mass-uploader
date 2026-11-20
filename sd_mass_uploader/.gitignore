@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+*.json.key
+*credentials*.json
+service-account*.json
+data/database/*
+data/reports/*
+data/templates/*
+logs/*
+!data/database/.gitkeep
+!data/reports/.gitkeep
+!logs/.gitkeep
+# Station state, the imported PeakAI pack and its laptop key. Never commit.
+data/station/
+build/
+dist/

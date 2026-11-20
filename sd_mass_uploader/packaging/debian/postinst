@@ -1,0 +1,54 @@
+#!/bin/sh
+# Install or upgrade: the station user, its folders, the Python environment from the bundled
+# packages (no internet needed), and the service. Existing data and settings are kept.
+set -e
+APP=/opt/sd-mass-uploader
+DATA=/var/lib/sd-mass-uploader
+LOGS=/var/log/sd-mass-uploader
+
+case "$1" in
+  configure)
+    if ! getent group sdu >/dev/null; then
+      addgroup --system sdu
+    fi
+    if ! getent passwd sdu >/dev/null; then
+      adduser --system --ingroup sdu --home "$DATA" --no-create-home \
+        --shell /usr/sbin/nologin --gecos "SD Uploader station" sdu
+    fi
+    # Group members (operators) may read the API token and reports; never the secrets or the DB.
+    install -d -o sdu -g sdu -m 0750 "$DATA" "$DATA/station" "$DATA/pack" "$DATA/reports" "$LOGS"
+    install -d -o sdu -g sdu -m 0700 "$DATA/database" "$DATA/secrets"
+
+    TAG=$(python3 -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
+    WHEELS="$APP/wheels/$TAG"
+    if [ ! -f "$WHEELS/requirements.txt" ]; then
+      echo "sd-mass-uploader: no bundled Python packages for $TAG." >&2
+      echo "Supported: $(ls "$APP/wheels" | tr '\n' ' ')" >&2
+      exit 1
+    fi
+    rm -rf "$APP/venv"
+    # System site packages give the desktop parts PyGObject (python3-gi) from the distribution.
+    python3 -m venv --system-site-packages "$APP/venv"
+    "$APP/venv/bin/pip" install --quiet --disable-pip-version-check --no-index \
+      --find-links "$WHEELS" --only-binary=:all: -r "$WHEELS/requirements.txt"
+
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload
+      systemctl enable sdu-daemon.service >/dev/null
+      if [ -n "$2" ]; then
+        systemctl restart sdu-daemon.service || true
+      else
+        systemctl start sdu-daemon.service || true
+      fi
+    fi
+    if [ -z "$2" ]; then
+      echo "SD Mass Uploader installed. Next:"
+      echo "  1. Let operators open the console: sudo usermod -aG sdu <user>  (then log in again)"
+      echo "  2. PeakAI stations: import the pack in the console's Setup page, or"
+      echo "     sudo -u sdu sdu pack import <zip>, and set peakai.vendor_code in"
+      echo "     /etc/sd-mass-uploader/config.yaml"
+      echo "  3. Open the console: sdu console   (or 'SD Uploader' in the app menu)"
+    fi
+    ;;
+esac
+exit 0

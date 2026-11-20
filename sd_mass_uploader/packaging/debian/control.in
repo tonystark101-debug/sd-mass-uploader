@@ -1,0 +1,15 @@
+Package: sd-mass-uploader
+Version: {version}
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: {maintainer}
+Installed-Size: {installed_kb}
+Depends: python3 (>= 3.12), python3-venv, python3-gi, gir1.2-gtk-3.0, udisks2, polkitd | policykit-1, usbutils, util-linux, adduser
+Recommends: gir1.2-webkit2-4.1, gir1.2-ayatanaappindicator3-0.1, gir1.2-notify-0.7
+Suggests: cage
+Description: SD card upload station (read-only, verified, PeakAI-ready)
+ Reads many SD cards at once through USB readers, never writing to them, and
+ uploads every file to Google Cloud Storage, checking each one. Includes the
+ always-on station service, the Operator Console, a panel indicator with
+ notifications, kiosk mode, PeakAI pass routing and the AI troubleshooter.

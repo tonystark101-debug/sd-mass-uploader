@@ -1,0 +1,40 @@
+[project]
+name = "sd-mass-uploader"
+version = "0.9.0"
+description = "Read-only multi-SD-card inventory and verified upload to Google Cloud Storage"
+requires-python = ">=3.12"
+dependencies = [
+    "google-cloud-storage==3.17.1",
+    "google-crc32c==1.9.0",
+    "PyYAML==6.0.3",
+    "fastapi==0.165.0",
+    "uvicorn==0.54.0",
+    "websockets==17.4",
+    "anthropic==2.10.0",
+    "pyudev==0.24.5; sys_platform == 'linux'",
+    "pywebview==6.2.1; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0", "ruff==0.17.4", "httpx2==2.16.2"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["hardware: needs physical readers/cards; never run by default"]
+addopts = "-m 'not hardware'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares parameters with these calls in defaults; they are not evaluated per call.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
+
+[tool.ruff.lint.per-file-ignores]
+# Copies lines of PeakAI's documents exactly, as the pack importer checks them verbatim.
+"tests/unit/peakai_fakes.py" = ["E501"]
