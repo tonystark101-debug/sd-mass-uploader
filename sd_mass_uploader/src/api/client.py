@@ -87,11 +87,12 @@ def route(command: str, args: dict) -> tuple[str, str, dict | None]:
         return "POST", "/api/v1/session", {"metadata": args.get("metadata") or {},
                                            "auto_upload": args.get("auto_upload")}
     if command == "open_packet":
-        counted = int(args.get("cards_counted") or 0)
-        return "POST", "/api/v1/packet/open", {"code": args.get("code") or "",
-                                                "cards_counted": counted,
-                                                "note": args.get("note") or "",
-                                                "auto_upload": args.get("auto_upload")}
+        counted = args.get("cards_counted")
+        return "POST", "/api/v1/packet/open", {
+            "code": args.get("code") or "",
+            "cards_counted": None if counted is None else int(counted),
+            "note": args.get("note") or "", "auto_upload": args.get("auto_upload"),
+            "vendor_only": bool(args.get("vendor_only"))}
     if command == "close":
         return "POST", "/api/v1/session/close", {"force": bool(args.get("force"))}
     if command == "auto_upload":

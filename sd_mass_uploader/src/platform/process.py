@@ -16,7 +16,11 @@ from typing import Protocol
 
 from src.core.exceptions import DeviceDetectionError, ReadOnlyViolation
 
-ALLOWED_PROGRAMS = frozenset({"powershell", "lsblk", "lsusb", "findmnt", "udisksctl", "ip"})
+ALLOWED_PROGRAMS = frozenset({"powershell", "lsblk", "lsusb", "findmnt", "udisksctl", "ip",
+                              "udevadm"})
+
+# udevadm may only wait for new devices to finish appearing. Exactly this.
+UDEVADM_SETTLE = ("settle", "--timeout=10")
 
 # `ip` (iproute2) may only list routes and addresses, to find the internet lines. Exactly these.
 IP_READ_ONLY_COMMANDS = (
@@ -56,6 +60,8 @@ def assert_read_only(argv: list[str]) -> None:
         raise ReadOnlyViolation(f"Command is not on the read-only allowlist: {argv[0]}")
     if program == "udisksctl":
         _assert_read_only_mount(argv)
+    if program == "udevadm" and tuple(argv[1:]) != UDEVADM_SETTLE:
+        raise ReadOnlyViolation(f"Only `udevadm settle` is allowed: {argv}")
     if program == "ip" and tuple(argv[1:]) not in IP_READ_ONLY_COMMANDS:
         raise ReadOnlyViolation(f"Only listing routes and addresses is allowed: {argv}")
 
@@ -126,6 +132,41 @@ def launch_console_window(argv: list[str]) -> None:
         raise ReadOnlyViolation(f"Unexpected arguments: {middle}")
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,  # noqa: S603
                      stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def start_claude(argv: list[str], cwd: str) -> subprocess.Popen:
+    """Start Claude Code in print mode for the problem fixer (src/ai/claude_fixer.py).
+
+    Only this shape: <claude program> -p <prompt> ... --settings <file>. The settings file holds
+    the guard hook that every command Claude tries must pass. Never through a shell. Output is
+    one JSON event per line on stdout.
+    """
+    if not argv or PurePath(argv[0]).name not in {"claude", "claude.exe", "claude.cmd"}:
+        raise ReadOnlyViolation(f"Only Claude Code may be started here: {argv[:1]}")
+    if len(argv) < 3 or argv[1] != "-p" or "--settings" not in argv:
+        raise ReadOnlyViolation("Claude Code must run in print mode with the guard settings")
+    return subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,  # noqa: S603
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace", bufsize=1,
+                            start_new_session=True)
+
+
+def probe(argv: list[str], timeout: float = 30) -> CommandResult | None:
+    """For `fixer check` only: is Claude Code installed, and can sudo run without a password?
+
+    Exactly two shapes: <claude> --version, and sudo -n true. None if the program is missing.
+    """
+    claude = PurePath(argv[0]).name in {"claude", "claude.exe", "claude.cmd"} \
+        and argv[1:] == ["--version"]
+    if not (claude or argv == ["sudo", "-n", "true"]):
+        raise ReadOnlyViolation(f"Not a fixer check: {argv}")
+    try:
+        done = subprocess.run(argv, capture_output=True, timeout=timeout, check=False,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return CommandResult(done.returncode, done.stdout.decode("utf-8", "replace"),
+                         done.stderr.decode("utf-8", "replace"))
 
 
 def run_reviewed(argv: list[str], check: Callable[[list[str]], None],

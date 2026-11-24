@@ -1,9 +1,14 @@
-// Lets the station's `sdu` user mount removable filesystems through udisks2 without a prompt.
+// Lets the station's `sdu` user, and operators in the `sdu` group who run it from a terminal,
+// mount card filesystems through udisks2 without a prompt.
 // polkit cannot restrict mount options, so read-only is enforced in the application:
 // src/platform/process.py refuses any udisksctl call except `mount` with `ro` and without `rw`.
+//
+// "-system" is needed for card readers behind a USB hub: udisks2 often marks those as system
+// devices (not removable), and without it their cards were never opened, so never listed.
 polkit.addRule(function (action, subject) {
-    if (subject.user == "sdu" &&
+    if ((subject.user == "sdu" || subject.isInGroup("sdu")) &&
         (action.id == "org.freedesktop.udisks2.filesystem-mount" ||
+         action.id == "org.freedesktop.udisks2.filesystem-mount-system" ||
          action.id == "org.freedesktop.udisks2.filesystem-mount-other-seat")) {
         return polkit.Result.YES;
     }

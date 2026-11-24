@@ -108,10 +108,14 @@ def test_windows_rows_become_lines_with_kind_and_warning():
         {"alias": "Wi-Fi", "guid": "{B}", "ip": "192.168.29.12", "gateway": "192.168.29.1",
          "desc": "Intel Wi-Fi 6", "media": "Native 802.11", "weak": "Enabled"},
         {"alias": "Ethernet 3", "guid": "{C}", "ip": "169.254.1.1", "gateway": "x"},
+        {"alias": "Ethernet 4", "guid": "{D}", "ip": "192.168.42.7", "gateway": "192.168.42.129",
+         "desc": "Remote NDIS based Internet Sharing Device", "media": "802.3", "weak": "Disabled"},
     ]
     lines = parse_windows(rows)
-    assert [(line.name, line.kind) for line in lines] == [("Ethernet 2", "USB"),
-                                                         ("Wi-Fi", "Wi-Fi")]
+    # A hub's LAN port is a wired line; a phone sharing its connection is "USB".
+    assert [(line.name, line.kind) for line in lines] == [("Ethernet 2", "Ethernet (USB)"),
+                                                         ("Wi-Fi", "Wi-Fi"),
+                                                         ("Ethernet 4", "USB")]
     assert lines[0].key == "{A}" and lines[0].warning is None
     assert "WeakHostSend" in lines[1].warning
 

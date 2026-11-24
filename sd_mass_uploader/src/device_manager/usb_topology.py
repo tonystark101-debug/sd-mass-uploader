@@ -209,8 +209,9 @@ def _read_hub_ports(path: str) -> list[WindowsPort]:
     return ports
 
 
-def volume_disk_number(drive_letter: str) -> tuple[int, int] | None:
-    """Ask the storage driver which (disk, partition) holds a drive letter.
+def volume_disk_number(volume: str) -> tuple[int, int] | None:
+    r"""Ask the storage driver which (disk, partition) holds a volume: a drive letter ("F") or a
+    volume path (\\?\Volume{...}\) for a card Windows gave no letter.
 
     Needed for cards formatted with no partition table, which Get-Partition can miss. The volume
     is opened with zero access rights: it can answer this query, but cannot read or write data.
@@ -229,7 +230,8 @@ def volume_disk_number(drive_letter: str) -> tuple[int, int] | None:
     ]
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     file_share_read_write = 0x3
-    handle = kernel32.CreateFileW(f"\\\\.\\{drive_letter}:", 0, file_share_read_write, None,
+    target = f"\\\\.\\{volume}:" if len(volume) == 1 else volume.rstrip("\\")
+    handle = kernel32.CreateFileW(target, 0, file_share_read_write, None,
                                   _HubHandle.OPEN_EXISTING, 0, None)
     if handle in (_HubHandle.INVALID, None):
         return None
@@ -244,6 +246,52 @@ def volume_disk_number(drive_letter: str) -> tuple[int, int] | None:
         return disk, partition
     finally:
         kernel32.CloseHandle(handle)
+
+
+CM_DRP_DRIVER = 0x0000000A
+_CR_SUCCESS = 0
+
+
+def pnp_parents_and_drivers(instance_ids: list[str]) -> list[dict]:
+    """Each device's parent and driver key, read from the device tree (cfgmgr32).
+
+    The same answers as PowerShell's Get-PnpDeviceProperty (DEVPKEY_Device_Parent and
+    DEVPKEY_Device_Driver), in the same shape, but in microseconds instead of about two seconds
+    per device: with a hub of 16 card readers that is the difference between a scan that finishes
+    and one that times out and finds no cards at all. Read-only queries.
+    """
+    if sys.platform != "win32":
+        raise OSError("the Windows device tree is not available on this platform")
+    cfgmgr = ctypes.WinDLL("cfgmgr32")
+    cfgmgr.CM_Locate_DevNodeW.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_wchar_p,
+                                          ctypes.c_uint32]
+    cfgmgr.CM_Get_Parent.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32,
+                                     ctypes.c_uint32]
+    cfgmgr.CM_Get_Device_IDW.argtypes = [ctypes.c_uint32, ctypes.c_wchar_p, ctypes.c_uint32,
+                                         ctypes.c_uint32]
+    cfgmgr.CM_Get_DevNode_Registry_PropertyW.argtypes = [
+        ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32]
+    found: list[dict] = []
+    for instance in instance_ids:
+        node = ctypes.c_uint32(0)
+        if cfgmgr.CM_Locate_DevNodeW(ctypes.byref(node), instance, 0) != _CR_SUCCESS:
+            continue  # Unplugged since the inventory query; the next scan sees it gone.
+        parent = ctypes.c_uint32(0)
+        if cfgmgr.CM_Get_Parent(ctypes.byref(parent), node.value, 0) == _CR_SUCCESS:
+            text = ctypes.create_unicode_buffer(512)
+            if cfgmgr.CM_Get_Device_IDW(parent.value, text, 512, 0) == _CR_SUCCESS and text.value:
+                found.append({"InstanceId": instance, "KeyName": "DEVPKEY_Device_Parent",
+                              "Data": text.value})
+        kind = ctypes.c_uint32(0)
+        driver = ctypes.create_unicode_buffer(256)
+        size = ctypes.c_uint32(ctypes.sizeof(driver))
+        if cfgmgr.CM_Get_DevNode_Registry_PropertyW(
+                node.value, CM_DRP_DRIVER, ctypes.byref(kind), driver, ctypes.byref(size),
+                0) == _CR_SUCCESS and driver.value:
+            found.append({"InstanceId": instance, "KeyName": "DEVPKEY_Device_Driver",
+                          "Data": driver.value})
+    return found
 
 
 def enumerate_windows_hubs() -> tuple[list[str], list[WindowsPort], list[str]]:

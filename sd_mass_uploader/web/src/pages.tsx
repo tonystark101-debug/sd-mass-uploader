@@ -1,5 +1,7 @@
 // History, Hardware and Setup.
-import { KeyRound, Upload } from "lucide-react";
+import {
+  CircleCheck, KeyRound, Upload, X,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { api, ApiError } from "./api";
 import { since, speed } from "./format";
@@ -188,13 +190,13 @@ export function SetupPage({ state }: { state: StationState }) {
             <pre>{check.lines.join("\n")}</pre>
             {check.ok ? (
               <div className="actions-row">
-                <Button kind="primary" busy={busy === "apply"} onClick={() => run("apply",
+                <Button icon={<CircleCheck size={16} />} kind="primary" busy={busy === "apply"} onClick={() => run("apply",
                   async () => {
                     const result = await api<{ applied: string }>("POST", "/api/v1/pack/apply");
                     setApplied(result.applied);
                     setCheck(null);
                   })}>Apply this pack</Button>
-                <Button kind="ghost" onClick={() => run("cancel", async () => {
+                <Button icon={<X size={16} />} kind="ghost" onClick={() => run("cancel", async () => {
                   await api("POST", "/api/v1/pack/cancel");
                   setCheck(null);
                 })}>Cancel</Button>

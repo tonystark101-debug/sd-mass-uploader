@@ -59,7 +59,8 @@ def test_reader_status_for_each_physical_case(snapshot):
     by_serial = {r.serial_number: r.status for r in snapshot.readers}
     assert by_serial["SERIAL_A"] == DeviceStatus.ACTIVE
     assert by_serial["SERIAL_B"] == DeviceStatus.EMPTY_READER
-    assert by_serial["SERIAL_C"] == DeviceStatus.UNMOUNTED_STORAGE
+    # No drive letter, but formatted and on a USB reader: read through its volume path.
+    assert by_serial["SERIAL_C"] == DeviceStatus.ACTIVE
     assert by_serial["SERIAL_D"] == DeviceStatus.READER_PRESENT_SLOT_UNKNOWN
 
 
@@ -110,11 +111,33 @@ def test_unresolved_volume_stays_unlinked():
     assert next(v for v in raw.volumes if v.volume_label == "CAM_A").storage_id is None
 
 
-def test_volume_without_letter_is_unmounted(snapshot):
+def test_card_without_a_drive_letter_is_read_through_its_volume_path(snapshot):
     volume = next(v for v in snapshot.volumes if v.volume_label == "CAM_C")
-    assert volume.is_mounted is False
-    assert volume.access_status == AccessStatus.NOT_MOUNTED
+    assert volume.is_mounted is True
+    assert volume.mount_point == "\\\\?\\Volume{card-c}\\"
+    assert volume.drive_letter is None
 
+
+def test_internal_or_unformatted_volume_without_letter_is_never_opened():
+    payload = copy.deepcopy(PAYLOAD)
+    payload["partitions"] += [
+        {"DiskNumber": 0, "PartitionNumber": 4, "Size": 1_000_000, "DriveLetter": "",
+         "AccessPaths": ["\\\\?\\Volume{recovery}\\"]},
+        {"DiskNumber": 3, "PartitionNumber": 2, "Size": 1_000_000, "DriveLetter": "",
+         "AccessPaths": ["\\\\?\\Volume{raw-part}\\"]},
+    ]
+    payload["volumes"] += [
+        {"DeviceID": "\\\\?\\Volume{recovery}\\", "DriveLetter": None, "Label": "Recovery",
+         "FileSystem": "NTFS", "Capacity": 1_000_000, "FreeSpace": 1, "SerialNumber": 7,
+         "DriveType": 3, "Name": "\\\\?\\Volume{recovery}\\"},
+        {"DeviceID": "\\\\?\\Volume{raw-part}\\", "DriveLetter": None, "Label": None,
+         "FileSystem": None, "Capacity": None, "FreeSpace": None, "SerialNumber": None,
+         "DriveType": 2, "Name": "\\\\?\\Volume{raw-part}\\"},
+    ]
+    raw = normalize_windows_inventory(payload, HUBS, PORTS, NOW)
+    by_id = {v.raw["device_id"]: v for v in raw.volumes}
+    assert by_id["\\\\?\\Volume{recovery}\\"].is_mounted is False  # Internal disk.
+    assert by_id["\\\\?\\Volume{raw-part}\\"].is_mounted is False  # No file system.
 
 def test_internal_nvme_is_never_a_reader(snapshot):
     nvme = next(s for s in snapshot.storage_devices if s.bus_type == "NVME")
@@ -243,3 +266,132 @@ def test_inventory_script_passes_safety_gate():
     run_powershell(runner, INVENTORY_SCRIPT)
     assert runner.calls[0][0] == "powershell.exe"
     assert "-EncodedCommand" in runner.calls[0]
+
+
+# --- Cards behind hubs: the device tree is read natively, never one slow query per device ---
+
+def _without_tree(payload):
+    """The inventory script's output: since the hub fix it carries no per-device properties."""
+    payload = copy.deepcopy(payload)
+    tree = payload.pop("pnp_properties")
+    return payload, tree
+
+
+def test_collect_reads_the_device_tree_natively():
+    payload, tree = _without_tree(PAYLOAD)
+    asked = []
+
+    def tree_reader(ids):
+        asked.append(ids)
+        return tree
+
+    runner = _Runner(CommandResult(0, json.dumps(payload), ""))
+    adapter = WindowsAdapter(runner, hub_reader=lambda: (HUBS, PORTS, []), clock=lambda: NOW,
+                             tree_reader=tree_reader)
+    snapshot = correlate(adapter.collect(), NOW)
+    assert len(runner.calls) == 1  # One PowerShell call, however many readers.
+    assert "USBSTOR\\DISK&VEN_GENERIC&PROD_STORAGE\\A&0" in asked[0]
+    linked = [d for d in snapshot.storage_devices if d.reader_id]
+    assert len(linked) == 3
+
+
+class _Sequence:
+    def __init__(self, *results):
+        self.results, self.calls = list(results), []
+
+    def run(self, argv, timeout=60):
+        self.calls.append((argv, timeout))
+        return self.results.pop(0)
+
+
+def test_powershell_is_the_fallback_when_the_tree_cannot_be_read():
+    payload, tree = _without_tree(PAYLOAD)
+
+    def broken(_ids):
+        raise OSError("cfgmgr32 missing")
+
+    runner = _Sequence(CommandResult(0, json.dumps(payload), ""),
+                       CommandResult(0, json.dumps({"errors": [], "pnp_properties": tree}), ""))
+    adapter = WindowsAdapter(runner, hub_reader=lambda: (HUBS, PORTS, []), clock=lambda: NOW,
+                             tree_reader=broken)
+    snapshot = correlate(adapter.collect(), NOW)
+    assert len(runner.calls) == 2
+    assert runner.calls[1][1] >= 60 + 4 * 9  # The time limit grows with the device count.
+    assert len([d for d in snapshot.storage_devices if d.reader_id]) == 3
+
+
+def _two_hubs_of_sixteen():
+    """A laptop with two powered hubs, each holding 16 single-slot readers, each with a card.
+    Windows has run out of drive letters after 20 cards."""
+    from src.device_manager.usb_topology import WindowsPort
+
+    guid = "#{f18a0e88-c30c-11d0-8815-00a0c906bed8}"
+    root = f"\\\\?\\USB#ROOT_HUB30#5&ROOT&0&0{guid}"
+    hubs, ports = [root], []
+    payload = {"errors": [], "usb_pnp": [
+        {"DeviceID": "USB\\ROOT_HUB30\\5&ROOT&0&0", "Name": "USB Root Hub (USB 3.0)",
+         "Service": "USBHUB3", "CompatibleID": None, "Status": "OK"}],
+        "disk_drives": [], "disks": [], "partitions": [], "volumes": []}
+    tree = []
+    index = 0
+    for h in (1, 2):
+        hub = f"\\\\?\\USB#VID_2109&PID_0817#6&HUB{h}&0&{h}{guid}"
+        hubs.append(hub)
+        ports.append(WindowsPort(root, h, "2109", "0817", 0x0320, 3, True, 0x3,
+                                 f"{{hub}}\\000{h}", hub))
+        hub_id = f"USB\\VID_2109&PID_0817\\6&HUB{h}&0&{h}"
+        payload["usb_pnp"].append({"DeviceID": hub_id, "Name": "Generic USB Hub",
+                                   "Service": "USBHUB3", "CompatibleID": ["USB\\Class_09"]})
+        tree.append({"InstanceId": hub_id, "KeyName": "DEVPKEY_Device_Driver",
+                     "Data": f"{{hub}}\\000{h}"})
+        for slot in range(1, 17):
+            index += 1
+            serial = f"RDR{index:02d}"
+            reader = f"USB\\VID_05E3&PID_0749\\{serial}"
+            driver = f"{{usb}}\\{index:04d}"
+            disk = f"USBSTOR\\DISK&VEN_GENERIC&PROD_SD_READER\\{serial}&0"
+            ports.append(WindowsPort(hub, slot, "05e3", "0749", 0x0300, 3, False, 0x3, driver))
+            payload["usb_pnp"].append({"DeviceID": reader, "Name": "USB Mass Storage Device",
+                                       "Service": "USBSTOR", "CompatibleID": ["USB\\Class_08"]})
+            tree += [{"InstanceId": reader, "KeyName": "DEVPKEY_Device_Driver", "Data": driver},
+                     {"InstanceId": disk, "KeyName": "DEVPKEY_Device_Parent", "Data": reader}]
+            payload["disk_drives"].append({
+                "Index": index, "Model": "Generic SD Card Reader USB Device",
+                "InterfaceType": "USB", "MediaType": "Removable Media", "MediaLoaded": True,
+                "Size": 64_000_000_000, "PNPDeviceID": disk, "Status": "OK"})
+            payload["disks"].append({"Number": index, "Size": 64_000_000_000, "BusType": "USB",
+                                     "OperationalStatus": "Online"})
+            letter = chr(ord("E") + index - 1) if index <= 20 else ""
+            volume = f"\\\\?\\Volume{{card-{index:02d}}}\\"
+            payload["partitions"].append({
+                "DiskNumber": index, "PartitionNumber": 1, "DriveLetter": letter,
+                "AccessPaths": ([f"{letter}:\\"] if letter else []) + [volume]})
+            payload["volumes"].append({
+                "DeviceID": volume, "DriveLetter": f"{letter}:" if letter else None,
+                "Label": f"CARD{index:02d}", "FileSystem": "exFAT", "Capacity": 63_000_000_000,
+                "FreeSpace": 1_000_000, "SerialNumber": 0x1000 + index, "DriveType": 2,
+                "Name": f"{letter}:\\" if letter else volume})
+    return payload, hubs, ports, tree
+
+
+def test_two_hubs_of_sixteen_readers_give_thirty_two_cards():
+    from src.inventory.inventory_service import find_cards
+
+    payload, hubs, ports, tree = _two_hubs_of_sixteen()
+    adapter = WindowsAdapter(_Runner(CommandResult(0, json.dumps(payload), "")),
+                             hub_reader=lambda: (hubs, ports, []), clock=lambda: NOW,
+                             tree_reader=lambda _ids: tree)
+    raw = adapter.collect()
+    for volume in raw.volumes:
+        if volume.is_mounted:
+            volume.access_status = AccessStatus.OK
+    snapshot = correlate(raw, NOW)
+    assert len([d for d in snapshot.usb_devices if d.is_hub]) == 3  # Root + both hubs.
+    assert len(snapshot.readers) == 32
+    deep = [r for r in snapshot.readers if r.topology_path.count("/") == 2]
+    assert len(deep) == 32  # Every reader is seen behind its hub: root/hub/slot.
+    cards = find_cards(snapshot)
+    assert len(cards) == 32
+    lettered = [c for c in cards if c.mount_point.endswith(":\\")]
+    assert len(lettered) == 20  # The other 12 are read through their volume paths.
+    assert all(c.negotiated_speed_mbps == 5000.0 for c in cards)

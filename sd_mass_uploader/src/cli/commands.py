@@ -18,7 +18,7 @@ from src.core.exceptions import ConfigurationError, UploaderError
 from src.core.timeutil import utc_now
 from src.database.station_repository import StationRepository
 from src.device_manager.detector import detect
-from src.inventory.inventory_service import find_cards, folder_card, refresh_inventory
+from src.inventory.inventory_service import find_cards, folder_card
 from src.reporting.logger import configure_logging
 from src.uploader.benchmark import measure_read
 from src.uploader.card_locator import locate_after_restart
@@ -29,12 +29,16 @@ logger = logging.getLogger(__name__)
 
 
 def cmd_check(app: App, args: argparse.Namespace) -> int:
-    snapshot = refresh_inventory(app.adapter(), app.inventory)
+    from src.inventory.readiness import explain, render_explanation
+
+    snapshot, problems = app.ready_inventory(say=(lambda _t: None) if args.json else print)
     if args.json:
         print(json.dumps(snapshot.to_dict(), indent=2, default=str, ensure_ascii=False))
         return 0
     print(render.render_snapshot(snapshot, internal=args.all))
     print(render.render_usb_tree(snapshot))
+    print()
+    print(render_explanation(explain(snapshot, problems)))
     print(f"\nSnapshot saved: {snapshot.snapshot_id}")
     return 0
 
@@ -45,7 +49,7 @@ def cmd_scan(app: App, args: argparse.Namespace) -> int:
     if args.path:
         cards = [folder_card(path) for path in args.path]
     else:
-        cards = find_cards(refresh_inventory(app.adapter(), app.inventory))
+        cards = find_cards(app.ready_inventory()[0])
     print("Storage scan: volumes found")
     print(render.render_cards(cards))
     if not args.files:
@@ -212,7 +216,7 @@ def cmd_gcs_test(app: App, args: argparse.Namespace) -> int:
 
 def cmd_benchmark(app: App, args: argparse.Namespace) -> int:
     cards = ([folder_card(path) for path in args.path] if args.path
-             else find_cards(refresh_inventory(app.adapter(), app.inventory)))
+             else find_cards(app.ready_inventory()[0]))
     if not cards:
         print("Nothing to measure.")
         return 1
@@ -263,6 +267,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="main.py", description="SD Mass Uploader")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    fixer = commands.add_parser("fixer", help="Claude Code fixes station problems by itself")
+    fixer_actions = fixer.add_subparsers(dest="fixer_action", required=True)
+    fixer_actions.add_parser("check", help="Is Claude Code installed, logged in, with sudo?")
+    fixer_run = fixer_actions.add_parser("run", help="Ask Claude Code to fix something now")
+    fixer_run.add_argument("what", help='What is wrong, e.g. "cards on the hub are not found"')
+    fixer_actions.add_parser("guard", help="(Claude Code's guard hook; not for people)")
+    fixer.set_defaults(handler=cmd_fixer)
 
     check = commands.add_parser("check", help="Refresh hardware inventory")
     check.add_argument("--json", action="store_true", help="Print the normalized inventory")
@@ -325,6 +337,53 @@ def build_parser() -> argparse.ArgumentParser:
     lines.set_defaults(handler=cmd_lines)
     add_station_parsers(commands)
     return parser
+
+
+def cmd_fixer(app: App, args: argparse.Namespace) -> int:
+    """Claude Code, the station's problem fixer: check the setup, or run it once now."""
+    import os
+    import sys
+
+    from src.ai.claude_fixer import APP_DIR, ClaudeFixer, FixContext
+    from src.platform.process import probe
+
+    fix = app.settings.claude_fix
+    if args.fixer_action == "guard":  # Normally handled in main.py before the config loads.
+        from src.ai.claude_fixer import guard_main
+
+        return guard_main()
+    if args.fixer_action == "check":
+        rows = [("Turned on (claude_fix.enabled)", fix.enabled, "set it to true in config.yaml")]
+        from src.ai.claude_fixer import find_claude
+
+        version = probe([find_claude(fix.command), "--version"])
+        rows.append((f"Claude Code installed ({fix.command})",
+                     bool(version and version.returncode == 0),
+                     "install Claude Code, then run `claude` once and log in"))
+        sudo = probe(["sudo", "-n", "true"])
+        rows.append(("sudo works without a password", bool(sudo and sudo.returncode == 0),
+                     "add a sudoers rule: echo \"$USER ALL=(ALL) NOPASSWD:ALL\" | sudo tee "
+                     "/etc/sudoers.d/sd-uploader-claude"))
+        is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+        rows.append(("Not running as root", not is_root,
+                     "run the station as your own user: Claude Code will not run as root"))
+        for label, ok, fix_text in rows:
+            print(f"  {'OK ' if ok else 'NO '} {label}" + ("" if ok else f": {fix_text}"))
+        if version and version.returncode == 0:
+            print(f"  Claude Code {version.stdout.strip()}")
+        return 0 if all(ok for _l, ok, _f in rows) else 1
+    # run: one session now, in this terminal.
+    config = app.settings.base_dir / "config.yaml"
+    context = FixContext(sys.executable, str(APP_DIR / "main.py"),
+                         str(config) if config.exists() else None,
+                         str(app.settings.resolve(app.settings.logging.directory)))
+    fixer = ClaudeFixer(fix, context,
+                        app.settings.resolve(app.settings.logging.directory) / "claude-fixes",
+                        APP_DIR)
+    problem = {"code": "OPERATOR", "severity": "error", "title": args.what,
+               "message": "Reported by the operator from the terminal."}
+    record = fixer.run_now([problem])
+    return 0 if record.fixed == "yes" else 1
 
 
 def main(argv: list[str] | None = None) -> int:

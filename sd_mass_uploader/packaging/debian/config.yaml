@@ -99,6 +99,21 @@ ai:
   auto_station_actions: true
   redact_personal: true
 
+# Claude Code fixes problems by itself while uploads continue (detection, mounting, network,
+# uploads). It uses the `claude` program installed here (your Claude subscription), with terminal
+# and sudo access. A guard refuses anything that could write to a card, delete from the bucket or
+# stop the uploads. Check the setup with: python main.py fixer check
+claude_fix:
+  enabled: true
+  command: "claude"
+  min_severity: "warning"
+  wait_seconds: 45
+  cooldown_minutes: 20
+  max_sessions_per_hour: 4
+  max_turns: 60
+  timeout_minutes: 25
+  show_in_terminal: true
+
 # PeakAI uploads. Turned on by importing PeakAI's zip: python main.py pack import <zip>
 # The pack sets the bucket, token service, passes and folder rules. The laptop key goes to
 # key_file (never into this file).

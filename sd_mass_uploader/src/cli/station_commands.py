@@ -81,7 +81,8 @@ def cmd_station(app: App, args: argparse.Namespace) -> int:
             payload["auto_upload"] = False
         return _send(app, "open", payload)
     if action == "packet":
-        payload = {"code": args.code, "cards_counted": args.cards, "note": args.note or ""}
+        payload = {"code": args.code, "cards_counted": args.cards, "note": args.note or "",
+                   "vendor_only": args.vendor_only}
         if args.manual_start:
             payload["auto_upload"] = False
         return _send(app, "open_packet", payload)
@@ -536,10 +537,14 @@ def add_station_parsers(commands) -> None:
     opener.add_argument("--manual-start", action="store_true",
                         help="Wait for `station start CARD` instead of uploading at once")
     packet = actions.add_parser(
-        "packet", help="Open a session from a vendor platform packet: cards in, count, code")
+        "packet", help="Open a session from a vendor code: put the cards in, type the code")
     packet.add_argument("code", help="The code written on the packet, e.g. FVGPA3451K")
-    packet.add_argument("--cards", type=int, required=True,
-                        help="How many cards you put in (the station checks it sees them all)")
+    packet.add_argument("--cards", type=int,
+                        help="How many cards you put in (optional: without it the cards the "
+                             "station sees are checked against the packet's count)")
+    packet.add_argument("--vendor-only", action="store_true",
+                        help="Take only the vendor, activity and place from the code; no packet "
+                             "is marked or reported")
     packet.add_argument("--note", help="Why to go on when the counts do not match")
     packet.add_argument("--manual-start", action="store_true")
     closer = actions.add_parser("close", help="End the session and write reports")

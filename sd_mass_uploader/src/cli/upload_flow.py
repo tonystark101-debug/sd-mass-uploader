@@ -15,7 +15,7 @@ from src.core.enums import SessionStatus, TaskStatus
 from src.core.exceptions import ConfigurationError, MetadataValidationError
 from src.core.models import Card
 from src.device_manager.detector import detect
-from src.inventory.inventory_service import find_cards, folder_card, refresh_inventory
+from src.inventory.inventory_service import find_cards, folder_card
 from src.metadata.session import SessionPlan, SessionPlanner
 from src.metadata.templates import load_metadata_file, save_metadata_file
 from src.metadata.validation import SessionMetadata, validate_metadata
@@ -68,10 +68,15 @@ def select_cards(cards: list[Card], args: argparse.Namespace, ask: Ask = input) 
     clear = [card for card in cards if not card.is_ambiguous]
     if args.yes:
         return clear
+    unsure = len(cards) - len(clear)
+    extra = f", 'every' to also take the {unsure} marked with a question" if unsure else ""
     while True:
-        answer = ask("Select cards: 'all' for confirmed cards, or numbers such as 1,3: ").strip()
+        answer = ask(f"Select cards: 'all' for confirmed cards{extra}, or numbers such as "
+                     "1,3: ").strip()
         if answer.lower() == "all":
             return clear
+        if answer.lower() == "every":
+            return list(cards)
         try:
             return [cards[int(item) - 1] for item in answer.split(",")]
         except (ValueError, IndexError):
@@ -207,7 +212,14 @@ def run_upload(app: App, args: argparse.Namespace) -> int:
     if args.source:
         cards = [folder_card(path) for path in args.source]
     else:
-        cards = find_cards(refresh_inventory(app.adapter(), app.inventory))
+        from src.inventory.readiness import explain, render_explanation
+
+        snapshot, problems = app.ready_inventory()
+        cards = find_cards(snapshot)
+        lines = explain(snapshot, problems)
+        if any(not line.is_card and "no card in this reader" not in line.verdict
+               for line in lines):
+            print(render_explanation(lines))  # Say why a plugged-in card is missing.
     if not cards:
         print("No uploadable cards found. Run `check` to see why.")
         return 1

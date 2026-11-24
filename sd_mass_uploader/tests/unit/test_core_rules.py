@@ -480,6 +480,7 @@ def test_scanner_and_uploader_only_open_read_only():
                "daemon.py",  # Station state and lock files under data/station.
                "simulator.py",  # Simulated cards, only inside the simulator folder.
                "auth.py",  # The API token under data/station.
+               "claude_fixer.py",  # Claude Code's session logs and guard settings, under logs.
                "pack.py"}  # The imported PeakAI pack and laptop key under data/station.
     for path in SOURCE:
         if path.name not in allowed:

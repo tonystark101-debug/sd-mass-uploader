@@ -81,7 +81,12 @@ class ApiServices:
 class PacketRequest(BaseModel):
     code: str = Field(description="The packet code written on the packet, e.g. FVGPA3451K or "
                                   "FVGPA3451K-061126-1430")
-    cards_counted: int = Field(ge=0, le=1000, description="Cards the operator put in")
+    cards_counted: int | None = Field(None, ge=0, le=1000,
+                                      description="Cards the operator put in, if asked. Without "
+                                                  "it the cards the station sees are checked "
+                                                  "against the packet's count")
+    vendor_only: bool = Field(False, description="Take only the vendor, activity and place from "
+                                                 "the code; no packet is marked or reported")
     note: str = Field("", max_length=300, description="Why to go on when the counts differ")
     auto_upload: bool | None = None
 
@@ -260,9 +265,10 @@ def create_app(services: ApiServices) -> FastAPI:
 
     @app.post("/api/v1/packet/open", tags=["session"], dependencies=auth, status_code=201)
     def packet_open(body: PacketRequest) -> dict:
-        """Open the session from the packet: no other questions."""
+        """Open the session from the code: no other questions."""
         return {"session_id": station.open_packet_session(body.code, body.cards_counted,
-                                                          body.note, body.auto_upload)}
+                                                          body.note, body.auto_upload,
+                                                          body.vendor_only)}
 
     @app.post("/api/v1/session/close", tags=["session"], dependencies=auth)
     def close_session(body: CloseSessionRequest) -> dict:

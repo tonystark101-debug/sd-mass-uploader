@@ -51,14 +51,18 @@ class FakeVendor:
         self.packet = item or packet()
         self.calls: list[tuple] = []
         self.down = False
+        self.several: list[dict] | None = None  # A code with several packets to choose from.
 
     def lookup(self, raw: str) -> dict:
         check_code(raw)
         self.calls.append(("lookup", raw))
         if self.down:
             raise VendorPlatformUnreachable("no answer")
-        if raw.upper().replace("-", "")[:10] != CODE:
+        clean = raw.upper().replace("-", "")
+        if clean[:10] != CODE:
             raise VendorPlatformError("no one has this code", 404)
+        if self.several and len(clean) == 10:
+            return {"packets": [dict(item) for item in self.several]}
         return {"packet": dict(self.packet)}
 
     def start(self, ref, detected, counted, note=""):
@@ -251,3 +255,51 @@ def test_reporting_retries_until_the_platform_answers(station):
     station.wait_for(lambda: any(call[0] == "uploaded" for call in station.vendor.calls))
     station.wait_for(lambda: not any(p["code"] == "E-VENDOR-REPORT"
                                      for p in station.station.view().problems))
+
+
+# ------------------------------------------------------------------ one question: the code
+
+def test_only_the_code_is_asked(station):
+    insert_cards(station, "A", "B")
+    preview = station.station.packet_preview(CODE)
+    assert preview["problems"] == [] and preview["cards"] == {"detected": 2, "counted": 2,
+                                                              "expected": 2}
+    assert preview["vendor"]["vendor"] == "Ravi Kumar" and preview["choices"] == []
+    station.station.execute("open_packet", {"code": CODE})
+    station.wait_states(A=CardState.UPLOADED, B=CardState.UPLOADED)
+    start = next(call for call in station.vendor.calls if call[0] == "start")
+    assert start == ("start", REF, 2, 2, "")
+
+
+def test_the_cards_seen_are_checked_against_the_packet(station):
+    insert_cards(station, "A")
+    preview = station.station.packet_preview(CODE)
+    assert preview["problems"] == ["The packet holds 2 card(s) (the manager counted 2) but the "
+                                   "station sees 1. 1 card(s) are not showing: check each "
+                                   "reader's light and push the card in again."]
+    with pytest.raises(StationError, match="station sees 1"):
+        station.station.open_packet_session(CODE)
+    station.station.open_packet_session(CODE, note="card 2 stayed with the vendor")
+    station.wait_states(A=CardState.UPLOADED)
+
+
+def test_a_code_with_several_packets_offers_them_or_just_the_vendor(station):
+    second = packet(ref=f"{CODE}-221126-1015", cards_sent=1, cards_received=None)
+    station.vendor.several = [second, packet()]
+    insert_cards(station, "A")
+    preview = station.station.packet_preview(CODE)
+    assert preview["packet"] is None
+    assert [item["ref"] for item in preview["choices"]] == [second["ref"], REF]
+    assert preview["details"] == {"activity": "garage", "city": "bijapur",
+                                  "vendor_name": "Ravi Kumar", "site": "Station road garage",
+                                  "packet_device": "GI Lab"}
+    with pytest.raises(StationError, match="more than one packet"):
+        station.station.open_packet_session(CODE)
+    # The vendor's details alone: no packet is marked arrived or reported uploaded.
+    station.station.execute("open_packet", {"code": CODE, "vendor_only": True})
+    station.wait_states(A=CardState.UPLOADED)
+    meta = station.station.view().session["metadata"]
+    assert (meta["vendor_name"], meta["activity"], meta["city"]) == ("Ravi Kumar", "garage",
+                                                                    "bijapur")
+    assert "packet" not in meta
+    assert {call[0] for call in station.vendor.calls} == {"lookup"}

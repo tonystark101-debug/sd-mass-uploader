@@ -1,7 +1,8 @@
 // The Operator Console: status at a glance, then the card grid, then detail on demand.
 import {
-  Bot, Cloud, CloudOff, Cpu, History, LayoutDashboard, Pause, Play, Settings, Square,
-  TriangleAlert, Wifi, WifiOff,
+  ArrowLeft, Bot, CircleCheck, CircleHelp, CirclePause, CircleX, Clock, Cloud, CloudOff,
+  CloudUpload, Cpu, Eject, Eye, Gauge, HardDrive, HardDriveUpload, History, LayoutDashboard,
+  Package, Pause, Play, Settings, Square, TriangleAlert, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AiPanel } from "./ai";
@@ -17,18 +18,29 @@ import { Button, Empty, Panel, useAction } from "./ui";
 
 type Page = "dashboard" | "problems" | "history" | "hardware" | "setup";
 
-const FILTERS: { key: string; label: string; states: CardState[]; tone: string }[] = [
-  { key: "all", label: "Inserted", states: [], tone: "gray" },
-  { key: "uploading", label: "Uploading", states: ["UPLOADING", "PAUSING"], tone: "blue" },
-  { key: "waiting", label: "Waiting", states: ["QUEUED", "READY", "SCANNING"], tone: "gray" },
-  { key: "uploaded", label: "Uploaded", states: ["UPLOADED"], tone: "green" },
+const FILTERS: { key: string; label: string; states: CardState[]; tone: string;
+                 icon: typeof Cpu }[] = [
+  { key: "all", label: "Inserted", states: [], tone: "gray", icon: HardDrive },
+  { key: "uploading", label: "Uploading", states: ["UPLOADING", "PAUSING"], tone: "blue",
+    icon: CloudUpload },
+  { key: "waiting", label: "Waiting", states: ["QUEUED", "READY", "SCANNING"], tone: "gray",
+    icon: Clock },
+  { key: "uploaded", label: "Uploaded", states: ["UPLOADED"], tone: "green", icon: CircleCheck },
   { key: "failed", label: "Failed", states: ["FAILED", "UPLOADED_WITH_ISSUES", "NEEDS_ATTENTION"],
-    tone: "red" },
-  { key: "paused", label: "Paused", states: ["PAUSED"], tone: "amber" },
-  { key: "removed", label: "Removed", states: ["REMOVED"], tone: "purple" },
+    tone: "red", icon: CircleX },
+  { key: "paused", label: "Paused", states: ["PAUSED"], tone: "amber", icon: CirclePause },
+  { key: "removed", label: "Removed", states: ["REMOVED"], tone: "purple", icon: Eject },
   { key: "you", label: "Needs you", states: ["NEEDS_CONFIRMATION", "NEEDS_DECISION"],
-    tone: "orange" },
+    tone: "orange", icon: CircleHelp },
 ];
+
+const PAGES = [
+  ["dashboard", "Dashboard", LayoutDashboard],
+  ["problems", "Problems", TriangleAlert],
+  ["history", "History", History],
+  ["hardware", "Hardware", Cpu],
+  ["setup", "Setup", Settings],
+] as const;
 
 function count(state: StationState, key: string): number {
   const c = state.counters;
@@ -61,41 +73,50 @@ export function App() {
   const problems = state.problems;
   const urgent = problems.filter((p) => p.severity === "critical" || p.severity === "error");
 
+  const title = page === "dashboard" ? (state.session ? "Dashboard" : "New upload")
+    : PAGES.find(([key]) => key === page)![1];
+
   return (
-    <div className={`app${stale ? " is-stale" : ""}`}>
-      <Header state={state} connection={connection} lastUpdate={lastUpdate}
-              onAi={() => setAi({})} />
-      <nav className="tabs" aria-label="Pages">
-        {([
-          ["dashboard", "Dashboard", LayoutDashboard],
-          ["problems", `Problems${problems.length ? ` (${problems.length})` : ""}`, TriangleAlert],
-          ["history", "History", History],
-          ["hardware", "Hardware", Cpu],
-          ["setup", "Setup", Settings],
-        ] as const).map(([key, label, Icon]) => (
-          <button key={key} type="button" className={`tab${page === key ? " active" : ""}`}
-                  aria-current={page === key ? "page" : undefined} onClick={() => setPage(key)}>
-            <Icon size={18} aria-hidden="true" /> {label}
-          </button>
-        ))}
-      </nav>
-      {stale && (
-        <div className="banner banner-bad" role="alert">
-          <WifiOff size={18} aria-hidden="true" />
-          Not connected to the station. What you see may be out of date. Reconnecting…
+    <div className={`shell${stale ? " is-stale" : ""}`}>
+      <aside className="sidebar">
+        <div className="logo">
+          <span className="logo-mark" aria-hidden="true"><HardDriveUpload size={22} /></span>
+          <div><strong>SD Uploader</strong><small>Upload station</small></div>
         </div>
-      )}
-      <main className="main">
-        {page === "dashboard" && (state.session
-          ? <Dashboard state={state} events={events} handlers={handlers}
-                       urgentCount={urgent.length} onOpenCard={setOpenCard}
-                       onProblems={() => setPage("problems")} />
-          : <StartSession state={state} />)}
-        {page === "problems" && <ProblemList problems={problems} handlers={handlers} />}
-        {page === "history" && <HistoryPage />}
-        {page === "hardware" && <HardwarePage />}
-        {page === "setup" && <SetupPage state={state} />}
-      </main>
+        <nav className="nav" aria-label="Pages">
+          {PAGES.map(([key, label, Icon]) => (
+            <button key={key} type="button" className={`nav-item${page === key ? " active" : ""}`}
+                    aria-current={page === key ? "page" : undefined} onClick={() => setPage(key)}>
+              <Icon size={19} aria-hidden="true" />
+              <span>{key === "dashboard" && !state.session ? "New upload" : label}</span>
+              {key === "problems" && problems.length > 0 && (
+                <span className={`nav-count${urgent.length ? " bad" : ""}`}>{problems.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <StationHealth state={state} connection={connection} lastUpdate={lastUpdate} />
+      </aside>
+      <div className="workspace">
+        <Header state={state} title={title} onAi={() => setAi({})} />
+        {stale && (
+          <div className="banner banner-bad" role="alert">
+            <WifiOff size={18} aria-hidden="true" />
+            Not connected to the station. What you see may be out of date. Reconnecting…
+          </div>
+        )}
+        <main className="main">
+          {page === "dashboard" && (state.session
+            ? <Dashboard state={state} events={events} handlers={handlers}
+                         urgentCount={urgent.length} onOpenCard={setOpenCard}
+                         onProblems={() => setPage("problems")} />
+            : <StartSession state={state} />)}
+          {page === "problems" && <ProblemList problems={problems} handlers={handlers} />}
+          {page === "history" && <HistoryPage />}
+          {page === "hardware" && <HardwarePage />}
+          {page === "setup" && <SetupPage state={state} />}
+        </main>
+      </div>
       {openCard && <CardDrawer cardId={openCard} destination={state.destination}
                                onClose={() => setOpenCard(null)} />}
       {ai && <AiPanel start={ai} onClose={() => setAi(null)} />}
@@ -103,35 +124,56 @@ export function App() {
   );
 }
 
-function Header({ state, connection, lastUpdate, onAi }: {
-  state: StationState; connection: Connection; lastUpdate: number; onAi: () => void;
+function StationHealth({ state, connection, lastUpdate }: {
+  state: StationState; connection: Connection; lastUpdate: number;
 }) {
-  const meta = state.session?.metadata ?? {};
   const live = connection === "live";
   const cloudBad = live && Boolean(state.engine.problem || state.engine.store_error);
-  const summary = state.session
-    ? [meta.activity ?? meta.activity_name, meta.city ?? meta.place_of_recording,
-       meta.upload_date ?? meta.recording_date].filter(Boolean).join(" · ")
-    : "No session open";
+  const net = state.network;
   return (
-    <header className="header">
-      <div className="brand">
-        <strong>SD Uploader</strong>
-        <span className="muted">{summary}</span>
+    <div className="health" aria-label="Station status">
+      <div className={`health-row ${live ? "good" : "bad"}`}
+           title={lastUpdate ? `Updated ${clock(new Date(lastUpdate).toISOString())}` : ""}>
+        {live ? <Wifi size={16} /> : <WifiOff size={16} />}
+        <span>Station</span><strong>{live ? "Live" : "Offline"}</strong>
       </div>
-      <div className="header-status">
-        <span className={`status-dot ${cloudBad ? "bad" : live && state.engine.running ? "good" : ""}`}>
-          {cloudBad || !live ? <CloudOff size={16} /> : <Cloud size={16} />}
-          {!live ? "Status unknown" : cloudBad ? "Uploads stopped"
-            : state.engine.running ? "Uploading enabled" : "Idle"}
-        </span>
-        <span className={`status-dot ${connection === "live" ? "good" : "bad"}`}
-              title={lastUpdate ? `Updated ${clock(new Date(lastUpdate).toISOString())}` : ""}>
-          {connection === "live" ? <Wifi size={16} /> : <WifiOff size={16} />}
-          {connection === "live" ? "Live" : "Offline"}
-        </span>
-        <Button kind="secondary" icon={<Bot size={16} />} onClick={onAi}>Ask AI</Button>
+      <div className={`health-row ${cloudBad || !live ? "bad" : state.engine.running ? "good" : ""}`}>
+        {cloudBad || !live ? <CloudOff size={16} /> : <Cloud size={16} />}
+        <span>Cloud</span>
+        <strong>{!live ? "Unknown" : cloudBad ? "Stopped" : state.engine.running ? "Uploading" : "Idle"}</strong>
       </div>
+      {net?.enabled && (
+        <div className={`health-row ${net.working > 0 ? "good" : "bad"}`}>
+          <Gauge size={16} />
+          <span>{net.working} {net.working === 1 ? "line" : "lines"}</span>
+          <strong>{speedText(net.total_mbit_per_s)}</strong>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Header({ state, title, onAi }: { state: StationState; title: string; onAi: () => void }) {
+  const meta = state.session?.metadata ?? {};
+  const chips = state.session
+    ? [meta.vendor_name ?? meta.operator_name, meta.activity ?? meta.activity_name,
+       meta.city ?? meta.place_of_recording, meta.upload_date ?? meta.recording_date]
+        .filter(Boolean)
+    : [];
+  const packet = state.destination.packet;
+  return (
+    <header className="topbar">
+      <div className="topbar-title">
+        <h1>{title}</h1>
+        <div className="chips">
+          {chips.length
+            ? chips.map((chip) => <span key={String(chip)} className="chip">{String(chip)}</span>)
+            : <span className="muted small">No upload running</span>}
+          {packet && <span className="chip chip-blue"><Package size={13} aria-hidden="true" />
+            {packet.ref}</span>}
+        </div>
+      </div>
+      <Button kind="secondary" icon={<Bot size={17} />} onClick={onAi}>Ask AI</Button>
     </header>
   );
 }
@@ -162,11 +204,24 @@ function Dashboard({ state, events, handlers, urgentCount, onOpenCard, onProblem
                   className={`counter tone-${item.tone}${filter === item.key ? " selected" : ""}`}
                   onClick={() => setFilter(filter === item.key ? "all" : item.key)}
                   aria-pressed={filter === item.key}>
+            <span className="counter-icon" aria-hidden="true"><item.icon size={18} /></span>
             <span className="counter-value">{count(state, item.key)}</span>
             <span className="counter-label">{item.label}</span>
           </button>
         ))}
       </section>
+
+      {state.counters.needs_decision > 0 && (
+        <div className="alert alert-warn" role="status">
+          <CircleHelp size={22} aria-hidden="true" />
+          <div className="grow">
+            <strong>{state.counters.needs_decision} card(s) need your answer</strong>
+            <p className="small">The station could not tell which device recorded them, or it
+              differs from the packet. Open the card and choose the device.</p>
+          </div>
+          <Button icon={<Eye size={16} />} kind="primary" onClick={() => setFilter("you")}>Show them</Button>
+        </div>
+      )}
 
       <section className="overall" aria-label="Overall progress">
         <div className="bar big" role="progressbar" aria-valuenow={share} aria-valuemin={0}
@@ -247,7 +302,7 @@ function Dashboard({ state, events, handlers, urgentCount, onOpenCard, onProblem
                                      "Pausing. Files in progress finish first.")}>Pause all</Button>
         )}
         {state.counters.ready > 0 && (
-          <Button kind="primary" busy={busy === "start"}
+          <Button icon={<Play size={16} />} kind="primary" busy={busy === "start"}
                   onClick={() => run("start", () => api("POST", "/api/v1/session/start-all"),
                                      "Started.")}>Start {state.counters.ready} ready</Button>
         )}
@@ -286,8 +341,8 @@ function EndSession({ state, onClose }: { state: StationState; onClose: () => vo
           <p className="muted">If you end it now, their remaining files are not uploaded. They
             can be finished later from the command line with <code>retry</code>.</p>
           <div className="actions-row">
-            <Button kind="secondary" onClick={onClose}>Keep going</Button>
-            <Button kind="danger" busy={busy === "end"} onClick={() => end(true)}>
+            <Button icon={<ArrowLeft size={16} />} kind="secondary" onClick={onClose}>Keep going</Button>
+            <Button icon={<Square size={16} />} kind="danger" busy={busy === "end"} onClick={() => end(true)}>
               End anyway
             </Button>
           </div>
@@ -296,8 +351,8 @@ function EndSession({ state, onClose }: { state: StationState; onClose: () => vo
         <>
           <p>Every card is finished. Ending writes the reports and closes the session.</p>
           <div className="actions-row">
-            <Button kind="secondary" onClick={onClose}>Cancel</Button>
-            <Button kind="primary" busy={busy === "end"} onClick={() => end(false)}>
+            <Button icon={<X size={16} />} kind="secondary" onClick={onClose}>Cancel</Button>
+            <Button icon={<CircleCheck size={16} />} kind="primary" busy={busy === "end"} onClick={() => end(false)}>
               End session
             </Button>
           </div>
@@ -310,6 +365,7 @@ function EndSession({ state, onClose }: { state: StationState; onClose: () => vo
 function Splash({ connection }: { connection: Connection }) {
   return (
     <div className="splash">
+      <span className="logo-mark big" aria-hidden="true"><HardDriveUpload size={34} /></span>
       <h1>SD Uploader</h1>
       <p className="muted">{connection === "offline"
         ? "The station is not answering. Is it running? Trying again…"

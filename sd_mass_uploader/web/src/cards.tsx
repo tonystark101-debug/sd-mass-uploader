@@ -1,5 +1,7 @@
 // The card grid and the card detail panel.
-import { Pause, Play, RefreshCw } from "lucide-react";
+import {
+  CircleCheck, Cpu, Pause, Play, RefreshCw, SkipForward,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { bytes, cardName, look, percent, speed } from "./format";
@@ -90,11 +92,11 @@ export function CardDrawer({ cardId, destination, onClose }: {
               </Button>
             )}
             {card.state === "READY" && (
-              <Button kind="primary" busy={busy === "start"}
+              <Button icon={<Play size={16} />} kind="primary" busy={busy === "start"}
                       onClick={() => command("start", "Started.")}>Start upload</Button>
             )}
             {card.state === "NEEDS_CONFIRMATION" && (
-              <Button kind="primary" busy={busy === "confirm"}
+              <Button icon={<CircleCheck size={16} />} kind="primary" busy={busy === "confirm"}
                       onClick={() => command("confirm", "Confirmed.")}>It is a card</Button>
             )}
             {["FAILED", "UPLOADED_WITH_ISSUES", "NEEDS_ATTENTION"].includes(card.state) && (
@@ -203,9 +205,9 @@ function PlaceCard({ devices, busy, onPlace, onSkip }: {
           <option value="">Choose the device…</option>
           {devices.map((name) => <option key={name} value={name}>{name}</option>)}
         </select>
-        <Button kind="primary" disabled={!device} busy={busy === "place"}
+        <Button icon={<Cpu size={16} />} kind="primary" disabled={!device} busy={busy === "place"}
                 onClick={() => onPlace(device)}>Use this device</Button>
-        <Button kind="ghost" onClick={onSkip}>Skip those files</Button>
+        <Button icon={<SkipForward size={16} />} kind="ghost" onClick={onSkip}>Skip those files</Button>
       </div>
     </section>
   );

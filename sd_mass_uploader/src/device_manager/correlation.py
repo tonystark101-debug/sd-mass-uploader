@@ -20,7 +20,11 @@ from src.core.models import (
 from src.device_manager.base import stable_id
 
 _CARD_READER_NAME = re.compile(
-    r"card[ _-]?reader|cardreader|sd/?mmc|micro[ _-]?sd|multi[ _-]?card|\bsd[xh]c\b|\bcard\b",
+    # "CRW" (card reader/writer) is how Genesys reader chips, common in multi-slot hubs, name
+    # themselves. A bare "STORAGE DEVICE" stays unconfirmed: the operator can still take those
+    # cards (`every` in the terminal upload).
+    r"card[ _-]?reader|cardreader|sd/?mmc|micro[ _-]?sd|multi[ _-]?card|\bsd[xh]c\b|\bcard\b"
+    r"|\bcrw\b",
     re.IGNORECASE,
 )
 

@@ -128,8 +128,22 @@ export interface VendorPacket {
   uploaded: { at: string; hours: number | null; station: string | null } | null;
 }
 
+export interface PacketChoice {
+  ref: string; sent_at: string; cards_sent: number; cards_received: number | null;
+  recorded_from: string | null; recorded_to: string | null; hours_declared: number;
+  uploaded: { at: string; hours: number | null; station: string | null } | null;
+}
+
+/** Who and where: the same for every packet under one vendor code. */
+export interface VendorIdentity {
+  code: string; vendor: string; environment: string; site: string; city: string;
+  device_kind: string;
+}
+
 export interface PacketPreview {
-  packet: VendorPacket;
+  packet: VendorPacket | null;           // null: the code has several packets (choices)
+  choices: PacketChoice[];
+  vendor: VendorIdentity;
   details: Record<string, string | number>;
   cards: { detected: number; counted: number; expected: number | null };
   problems: string[];

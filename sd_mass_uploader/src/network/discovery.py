@@ -31,7 +31,9 @@ class DiscoveryError(UploaderError):
 class FoundLine:
     key: str  # Stable identity: device name (Linux) or adapter GUID (Windows).
     name: str  # What the operator sees: "enp3s0", "Ethernet 2", "Wi-Fi".
-    kind: str  # "Ethernet", "Wi-Fi", "USB" (phone or USB adapter), or "Other".
+    # "Ethernet", "Ethernet (USB)" (a LAN cable in a USB adapter or a hub's LAN port), "Wi-Fi",
+    # "USB" (a phone sharing its connection), or "Other".
+    kind: str
     ip: str
     gateway: str
     device: str | None = None  # Linux: bind to this device (SO_BINDTODEVICE).
@@ -75,13 +77,17 @@ def _run_json(runner: CommandRunner, command: list[str]) -> list:
     return data if isinstance(data, list) else [data]
 
 
+_PHONE_DRIVERS = {"rndis_host", "ipheth"}  # Android and iPhone connection sharing.
+
+
 def _linux_kind(device: str) -> str:
     base = f"/sys/class/net/{device}"
     if os.path.exists(f"{base}/wireless") or os.path.exists(f"{base}/phy80211"):
         return "Wi-Fi"
     try:
         if "/usb" in os.path.realpath(f"{base}/device"):
-            return "USB"
+            driver = os.path.basename(os.path.realpath(f"{base}/device/driver"))
+            return "USB" if driver in _PHONE_DRIVERS else "Ethernet (USB)"
     except OSError:
         pass
     return "Ethernet" if os.path.exists(f"{base}/device") else "Other"
@@ -159,8 +165,12 @@ def parse_windows(rows: list) -> list[FoundLine]:
         text = f"{row.get('media', '')} {row.get('desc', '')}".lower()
         if "802.11" in text or "wireless" in text or "wi-fi" in text:
             kind = "Wi-Fi"
-        elif "ndis" in text or "rndis" in text or "usb" in text:
-            kind = "USB"
+        elif "ndis" in text or "usb" in text:
+            # A LAN cable in a USB adapter or a hub's LAN port, or a phone sharing its connection.
+            phone = any(word in text for word in ("rndis", "remote ndis", "internet sharing",
+                                                  "iphone", "apple mobile", "android"))
+            wired = any(word in text for word in ("ethernet", "gbe", "gigabit", "lan", "802.3"))
+            kind = "Ethernet (USB)" if wired and not phone else "USB"
         else:
             kind = "Ethernet"
         warning = None

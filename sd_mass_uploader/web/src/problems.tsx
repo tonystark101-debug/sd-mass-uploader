@@ -1,5 +1,7 @@
 // Problem cards: what happened, why, numbered steps, one fix button, and "Ask AI".
-import { Bot, Info, OctagonAlert, TriangleAlert, XCircle } from "lucide-react";
+import {
+  Bot, HardDrive, Info, OctagonAlert, TriangleAlert, Wrench, XCircle,
+} from "lucide-react";
 import { useState } from "react";
 import { api } from "./api";
 import { since } from "./format";
@@ -77,13 +79,13 @@ export function ProblemCard({ problem, handlers, compact }: {
       )}
       <div className="problem-actions">
         {problem.action && (
-          <Button kind="primary" busy={busy === "fix"}
+          <Button icon={<Wrench size={16} />} kind="primary" busy={busy === "fix"}
                   onClick={() => run("fix", () => runFix(problem, handlers))}>
             {problem.action.label}
           </Button>
         )}
         {problem.card_id && problem.action?.kind !== "place_card" && (
-          <Button kind="ghost" onClick={() => handlers.openCard(problem.card_id!)}>
+          <Button icon={<HardDrive size={16} />} kind="ghost" onClick={() => handlers.openCard(problem.card_id!)}>
             Open card
           </Button>
         )}

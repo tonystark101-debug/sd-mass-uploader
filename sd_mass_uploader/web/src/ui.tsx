@@ -28,12 +28,12 @@ export function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {
 }
 
 export function Button({ children, onClick, kind = "secondary", disabled, busy, title,
-                         icon }: {
+                         icon, size }: {
   children: ReactNode; onClick?: () => void; kind?: "primary" | "secondary" | "danger" | "ghost";
-  disabled?: boolean; busy?: boolean; title?: string; icon?: ReactNode;
+  disabled?: boolean; busy?: boolean; title?: string; icon?: ReactNode; size?: "sm" | "lg";
 }) {
   return (
-    <button type="button" className={`btn btn-${kind}`} onClick={onClick}
+    <button type="button" className={`btn btn-${kind}${size ? ` btn-${size}` : ""}`} onClick={onClick}
             disabled={disabled || busy} title={title}>
       {busy ? <Loader2 size={16} className="spin" aria-hidden="true" /> : icon}
       <span>{children}</span>
@@ -69,6 +69,7 @@ export function Panel({ title, onClose, children, wide }: {
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="empty">
+      <span className="empty-icon" aria-hidden="true"><ScanLine size={30} /></span>
       <h3>{title}</h3>
       {children && <div className="muted">{children}</div>}
     </div>
@@ -93,7 +94,11 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="notices" role="status" aria-live="polite">
         {notices.map((notice) => (
-          <div key={notice.id} className={`notice notice-${notice.tone}`}>{notice.text}</div>
+          <div key={notice.id} className={`notice notice-${notice.tone}`}>
+            {notice.tone === "good" ? <Check size={18} aria-hidden="true" />
+                                    : <AlertTriangle size={18} aria-hidden="true" />}
+            <span>{notice.text}</span>
+          </div>
         ))}
       </div>
     </NoticeContext.Provider>

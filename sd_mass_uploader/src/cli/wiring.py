@@ -55,6 +55,17 @@ class App:
     def adapter(self) -> PlatformAdapter:
         return create_adapter(self.settings.device_detection)
 
+    def ready_inventory(self, say=print):
+        """Every plugged-in card, ready: readers settled, new cards opened read-only (Linux),
+        saved as the latest inventory. Returns (snapshot, cards that could not be opened)."""
+        from src.device_manager.correlation import mark_disconnected
+        from src.inventory.readiness import ready_snapshot
+
+        snapshot, problems = ready_snapshot(self.adapter(), self.settings.station, say=say)
+        mark_disconnected(snapshot, self.inventory.latest())
+        self.inventory.save(snapshot)
+        return snapshot, problems
+
     def scan_service(self) -> ScanService:
         return ScanService(self.scans, self.settings.file_scanning)
 

@@ -158,6 +158,33 @@ AI_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 @dataclass
+class ClaudeFixSettings:
+    """Claude Code fixes station problems by itself while uploads continue (src/ai/claude_fixer).
+
+    Runs the `claude` program installed on the station (the operator's Claude subscription), with
+    terminal and sudo access. Every command it tries first passes a guard that refuses anything
+    that could write to a card, delete from the bucket or stop the uploads.
+    """
+
+    enabled: bool = False
+    command: str = "claude"  # Claude Code, logged in as the user who runs the station.
+    model: str = ""  # Empty: Claude Code's own default for the subscription.
+    min_severity: str = "warning"  # info, warning, error or critical.
+    wait_seconds: float = 45  # A problem must last this long: most clear by themselves.
+    cooldown_minutes: float = 20  # Before the same problem is handed to Claude again.
+    max_sessions_per_hour: int = 4
+    max_turns: int = 60
+    timeout_minutes: float = 25
+    show_in_terminal: bool = True  # Print Claude's steps in the station's terminal.
+    # Problems only a person can settle: which device recorded a card, a card changed while
+    # read, a name or safety rule, missing session details, a pass PeakAI must grant.
+    skip_codes: list[str] = field(default_factory=lambda: [
+        "W-CARD-CONFIRM", "W-CARD-DECISION", "E-SAFETY-BLOCK", "E-FILE-CHANGED", "E-CONFLICT",
+        "E-VERIFY-MISMATCH", "E-METADATA", "E-PEAKAI-PASS-DENIED", "W-INVALID-NAME",
+        "W-UNSAFE-NAME", "W-SIMULATOR-MISSING", "E-SESSION-BUSY"])
+
+
+@dataclass
 class PeakAiSettings:
     """PeakAI uploads. Active when a pack has been imported (`main.py pack import`)."""
 
@@ -206,6 +233,7 @@ class Settings:
     station: StationSettings = field(default_factory=StationSettings)
     api: ApiSettings = field(default_factory=ApiSettings)
     ai: AiSettings = field(default_factory=AiSettings)
+    claude_fix: ClaudeFixSettings = field(default_factory=ClaudeFixSettings)
     peakai: PeakAiSettings = field(default_factory=PeakAiSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     reporting: ReportingSettings = field(default_factory=ReportingSettings)

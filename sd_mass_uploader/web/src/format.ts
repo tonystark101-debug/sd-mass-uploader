@@ -106,6 +106,12 @@ export function describeEvent(kind: string, data: Record<string, unknown>): stri
     case "line_resting": return `Internet line ${data.line} resting after network failures`;
     case "line_no_internet": return `Internet line ${data.line} cannot reach Google`;
     case "packet_opened": return `Packet ${data.ref} from ${data.vendor}: ${data.cards} card(s)`;
+    case "claude_fix_started": return `Claude is fixing: ${(data.titles as string[] ?? []).join("; ")} (uploads continue)`;
+    case "claude_fix_step": return `Claude: ${data.text}`;
+    case "claude_fix_finished": return data.error
+      ? `Claude stopped: ${data.error}`
+      : `Claude finished: fixed ${data.fixed ?? "unknown"} after ${data.commands} step(s)`;
+    case "vendor_session_opened": return `Started from vendor code ${data.code} (${data.vendor})`;
     case "engine_started": return "Uploader started";
     case "engine_stopped": return data.reason ? `Uploader stopped: ${data.reason}` : null;
     default: return null;

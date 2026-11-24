@@ -16,6 +16,7 @@ from src.device_manager.usb_topology import (
     WindowsPort,
     enumerate_windows_hubs,
     hub_instance_id,
+    pnp_parents_and_drivers,
     volume_disk_number,
     windows_speed_mbps,
 )
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 SPEED_SOURCE = "windows:IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX"
 _MASS_STORAGE_SERVICES = {"usbstor", "uaspstor"}
 _EXTERNAL_MEDIA = re.compile(r"removable", re.IGNORECASE)
+_EXTERNAL_BUSES = {"USB", "SD", "MMC"}  # As src/inventory/inventory_service.EXTERNAL_BUSES.
 
 INVENTORY_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -46,22 +48,34 @@ Section 'volumes' { Get-CimInstance Win32_Volume | Select-Object DeviceID, Drive
   FileSystem, Capacity, FreeSpace, SerialNumber, DriveType, Name }
 Section 'usb_pnp' { Get-CimInstance Win32_PnPEntity -Filter "DeviceID LIKE 'USB\\%'" |
   Select-Object DeviceID, Name, Manufacturer, Service, CompatibleID, Status }
-Section 'pnp_properties' {
-  $ids = @($r['usb_pnp'] | ForEach-Object { $_.DeviceID }) +
-         @($r['disk_drives'] | ForEach-Object { $_.PNPDeviceID })
-  $ids = @($ids | Where-Object { $_ } | Sort-Object -Unique)
-  # One at a time: passing -InstanceId an array repeats some devices and drops others.
-  foreach ($id in $ids) {
-    try {
-      Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Parent, DEVPKEY_Device_Driver |
-        Select-Object InstanceId, KeyName, Data
-    } catch {
-      $r.errors += @{ section = "pnp_properties:$id"; message = "$($_.Exception.Message)" }
-    }
+ConvertTo-Json -InputObject $r -Depth 5 -Compress
+"""
+
+# The slow fallback: about two seconds per device. Used only if the device tree can't be read
+# directly (pnp_parents_and_drivers), with a time limit that grows with the number of devices.
+PROPERTIES_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$r = [ordered]@{ errors = @(); pnp_properties = @() }
+$ids = @(%IDS%)
+# One at a time: passing -InstanceId an array repeats some devices and drops others.
+foreach ($id in $ids) {
+  try {
+    $r.pnp_properties += @(Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Parent,
+      DEVPKEY_Device_Driver | Select-Object InstanceId, KeyName, Data)
+  } catch {
+    $r.errors += @{ section = "pnp_properties:$id"; message = "$($_.Exception.Message)" }
   }
 }
 ConvertTo-Json -InputObject $r -Depth 5 -Compress
 """
+
+
+def device_ids(payload: dict) -> list[str]:
+    """Every USB device and disk whose place in the device tree is needed."""
+    ids = [row.get("DeviceID") for row in payload.get("usb_pnp", [])]
+    ids += [row.get("PNPDeviceID") for row in payload.get("disk_drives", [])]
+    return sorted({str(item) for item in ids if item})
 
 
 def _text(value: Any) -> str | None:
@@ -274,6 +288,8 @@ DiskLookup = Callable[[str], tuple[int, int] | None]
 def _build_volumes(payload: dict, storage: list[StorageDevice],
                    disk_lookup: DiskLookup) -> list[Volume]:
     disk_to_storage = {item.raw.get("disk_number"): item.storage_id for item in storage}
+    external = {item.storage_id for item in storage
+                if (item.bus_type or "").upper() in _EXTERNAL_BUSES}
     access_path_owner: dict[str, tuple[int, int]] = {}
     letter_owner: dict[str, tuple[int, int]] = {}
     for part in payload.get("partitions", []):
@@ -288,14 +304,21 @@ def _build_volumes(payload: dict, storage: list[StorageDevice],
         device_id = _text(row.get("DeviceID")) or ""
         letter = (_text(row.get("DriveLetter")) or "").rstrip(":").upper() or None
         owner = access_path_owner.get(device_id.lower()) or letter_owner.get(letter or "")
-        if owner is None and letter:
-            owner = disk_lookup(letter)  # Cards with no partition table.
+        if owner is None and (letter or device_id):
+            owner = disk_lookup(letter or device_id)  # Cards with no partition table.
         name = _text(row.get("Name"))
         mount = name if name and not name.startswith("\\\\?\\") else None
+        storage_id = disk_to_storage.get(owner[0]) if owner else None
+        if mount is None and device_id.startswith("\\\\?\\Volume") \
+                and storage_id in external and row.get("FileSystem"):
+            # Windows has 26 drive letters; two hubs of 16 cards run out. A card on a reader
+            # without one is read through its volume path (\\?\Volume{...}\), which works the
+            # same for reading files. Only on external buses: internal disks are never opened.
+            mount = device_id if device_id.endswith("\\") else device_id + "\\"
         result.append(
             Volume(
                 volume_id=stable_id("vol", device_id),
-                storage_id=disk_to_storage.get(owner[0]) if owner else None,
+                storage_id=storage_id,
                 partition_id=f"{owner[0]}:{owner[1]}" if owner else None,
                 mount_point=mount,
                 drive_letter=letter,
@@ -329,16 +352,19 @@ def normalize_windows_inventory(payload: dict, hubs: list[str], ports: list[Wind
 
 
 HubReader = Callable[[], tuple[list[str], list[WindowsPort], list[str]]]
+TreeReader = Callable[[list[str]], list[dict]]
 
 
 class WindowsAdapter:
     def __init__(self, runner: CommandRunner | None = None,
                  hub_reader: HubReader = enumerate_windows_hubs,
-                 detect_topology: bool = True, clock: Callable[[], str] | None = None) -> None:
+                 detect_topology: bool = True, clock: Callable[[], str] | None = None,
+                 tree_reader: TreeReader = pnp_parents_and_drivers) -> None:
         from src.core.timeutil import utc_now
 
         self._runner = runner or SubprocessRunner()
         self._hub_reader = hub_reader
+        self._tree_reader = tree_reader
         self._detect_topology = detect_topology
         self._clock = clock or utc_now
 
@@ -354,8 +380,33 @@ class WindowsAdapter:
         except json.JSONDecodeError as exc:
             return {}, [DetectionIssue("windows:powershell", f"Bad JSON: {exc}", "ERROR")]
 
+    def _tree(self, payload: dict) -> list[DetectionIssue]:
+        """Fill payload["pnp_properties"]: which hub port each reader and disk hangs from."""
+        ids = device_ids(payload)
+        if not ids:
+            payload["pnp_properties"] = []
+            return []
+        try:
+            payload["pnp_properties"] = self._tree_reader(ids)
+            return []
+        except OSError as exc:
+            logger.warning("Device tree unavailable (%s); asking PowerShell, which is slow", exc)
+        quoted = ", ".join("'" + item.replace("'", "''") + "'" for item in ids)
+        try:
+            done = run_powershell(self._runner, PROPERTIES_SCRIPT.replace("%IDS%", quoted),
+                                  timeout=60 + 4 * len(ids))
+            slow = json.loads(done.stdout) if done.returncode == 0 else {}
+        except (DeviceDetectionError, json.JSONDecodeError) as exc:
+            payload["pnp_properties"] = []
+            return [DetectionIssue("windows:pnp_properties", str(exc))]
+        payload["pnp_properties"] = slow.get("pnp_properties") or []
+        payload.setdefault("errors", []).extend(slow.get("errors") or [])
+        return []
+
     def collect(self) -> RawInventory:
         payload, issues = self._query()
+        if payload:
+            issues += self._tree(payload)
         hubs: list[str] = []
         ports: list[WindowsPort] = []
         if self._detect_topology:

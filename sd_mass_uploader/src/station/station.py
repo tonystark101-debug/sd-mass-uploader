@@ -245,57 +245,86 @@ class Station:
                                "station (vendor_platform.enabled, with a PeakAI pack)")
         return vendor
 
-    def _lookup_packet(self, code: str) -> dict:
+    def _lookup(self, code: str) -> dict:
+        """The platform's answer: {"packet": ...}, or {"packets": [...]} to choose from."""
         from src.vendor.client import VendorPlatformError
 
         try:
             answer = self._vendor().lookup(code)
         except VendorPlatformError as exc:
             raise StationError(str(exc)) from exc
-        if "packet" not in answer:
-            refs = [item["ref"] for item in answer.get("packets", [])]
-            raise StationError("This code has sent several packets that are not uploaded yet: "
-                               f"{', '.join(refs)}. Type the full reference written on this "
-                               "packet (the code with its date and time).")
-        return answer["packet"]
+        if not answer.get("packet") and not answer.get("packets"):
+            raise StationError("The vendor platform has nothing under this code")
+        return answer
 
-    def packet_preview(self, code: str, cards_counted: int) -> dict:
-        """Look the packet up and compare the counts. Changes nothing anywhere."""
-        from src.vendor.packet import check_counts, session_metadata
+    @staticmethod
+    def _one_packet(answer: dict) -> dict:
+        if answer.get("packet"):
+            return answer["packet"]
+        refs = [item["ref"] for item in answer.get("packets", [])]
+        raise StationError("This code has more than one packet: "
+                           f"{', '.join(refs)}. Choose the one written on this packet, or use "
+                           "only the vendor's details.")
 
-        packet = self._lookup_packet(code)
+    def packet_preview(self, code: str, cards_counted: int | None = None) -> dict:
+        """What the vendor platform knows for a code, and how the cards compare. Changes
+        nothing anywhere. A code with one packet to upload brings that packet; otherwise its
+        packets come back as choices, with the vendor's details (the same for every packet
+        under one code: vendor, place, activity and device)."""
+        from src.vendor.packet import check_counts, identity_metadata, session_metadata
+
+        answer = self._lookup(code)
         with self._lock:
             if self._repo.current() is not None:
                 raise StationError("A session is already open. End it before the next packet.")
             detected = len(self._waiting)
+        settings = self._settings.vendor_platform
+        if not answer.get("packet"):
+            packets = answer["packets"]
+            return {"packet": None, "choices": [_choice(item) for item in packets],
+                    "vendor": _identity(packets[0]),
+                    "details": identity_metadata(packets[0], settings),
+                    "cards": {"detected": detected, "counted": detected, "expected": None},
+                    "problems": []}
+        packet = answer["packet"]
         check = check_counts(detected, cards_counted, packet)
-        return {"packet": packet, "details": session_metadata(packet,
-                                                              self._settings.vendor_platform),
+        return {"packet": packet, "choices": [], "vendor": _identity(packet),
+                "details": session_metadata(packet, settings),
                 "cards": {"detected": check.detected, "counted": check.counted,
                           "expected": check.expected}, "problems": check.problems}
 
-    def open_packet_session(self, code: str, cards_counted: int, note: str = "",
-                            auto_upload: bool | None = None) -> str:
-        """The whole start: cards are in, the operator counted them and typed the code."""
-        from src.vendor.packet import check_counts, session_metadata
+    def open_packet_session(self, code: str, cards_counted: int | None = None, note: str = "",
+                            auto_upload: bool | None = None, vendor_only: bool = False) -> str:
+        """The whole start: the cards are in and the operator typed the code.
 
+        `vendor_only` takes just the vendor, activity and place from the code (no packet is
+        marked or reported): for cards that came without a packet of their own."""
+        from src.vendor.packet import check_counts, identity_metadata, session_metadata
+
+        settings = self._settings.vendor_platform
+        if vendor_only:
+            answer = self._lookup(code)
+            source = answer.get("packet") or answer["packets"][0]
+            session_id = self.open_session(identity_metadata(source, settings), auto_upload)
+            self.bus.publish("vendor_session_opened", code=source.get("code"),
+                             vendor=source.get("vendor"))
+            return session_id
         packets = getattr(self.profile, "packets", None)
         preview = self.packet_preview(code, cards_counted)
+        packet = preview["packet"] or self._one_packet({"packets": preview["choices"]})
         note = " ".join(str(note or "").split())[:300]
         if preview["problems"] and len(note) < 5:
             raise StationError(" ".join(preview["problems"]) + " Fix this, or give a reason "
                                "to go on anyway (it is sent to the vendor platform).")
-        packet = preview["packet"]
         with self._lock:
             detected = len(self._waiting)
         check = check_counts(detected, cards_counted, packet)  # Again: a card may have moved.
         if check.problems and len(note) < 5:
             raise StationError(" ".join(check.problems))
-        session_id = self.open_session(session_metadata(packet, self._settings.vendor_platform),
-                                       auto_upload)
-        packets.save(session_id, packet, detected, cards_counted, note)
+        session_id = self.open_session(session_metadata(packet, settings), auto_upload)
+        packets.save(session_id, packet, detected, check.counted, note)
         self.bus.publish("packet_opened", ref=packet["ref"], vendor=packet.get("vendor"),
-                         cards=cards_counted, detected=detected)
+                         cards=check.counted, detected=detected)
         return session_id
 
     def close_session(self, force: bool = False) -> str:
@@ -731,8 +760,10 @@ class Station:
             "open": lambda: self.open_session(args.get("metadata") or {},
                                               args.get("auto_upload")),
             "open_packet": lambda: self.open_packet_session(
-                str(args.get("code") or ""), int(args.get("cards_counted") or 0),
-                str(args.get("note") or ""), args.get("auto_upload")),
+                str(args.get("code") or ""),
+                None if args.get("cards_counted") is None else int(args["cards_counted"]),
+                str(args.get("note") or ""), args.get("auto_upload"),
+                bool(args.get("vendor_only"))),
             "close": lambda: self.close_session(bool(args.get("force"))),
             "pause": lambda: self.pause_card(card),
             "resume": lambda: self.resume_card(card),
@@ -913,3 +944,16 @@ class Station:
 
     def problem_history(self, limit: int = 100) -> list[dict]:
         return self._repo.problem_history(limit)
+
+
+def _identity(packet: dict) -> dict:
+    """Who and where, the same for every packet under one code. No phone numbers."""
+    return {key: packet.get(key) for key in ("code", "vendor", "environment", "site", "city",
+                                             "device_kind")}
+
+
+def _choice(packet: dict) -> dict:
+    """One packet to choose from, in a few words."""
+    keys = ("ref", "sent_at", "cards_sent", "cards_received", "recorded_from", "recorded_to",
+            "hours_declared", "uploaded")
+    return {key: packet.get(key) for key in keys}

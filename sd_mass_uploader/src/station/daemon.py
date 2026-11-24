@@ -148,6 +148,7 @@ class Daemon:
         self.api_error: str | None = None
         self.systemd = SystemdNotifier()
         self._last_pass = time.monotonic()
+        self.fixer = self._fixer(settings)
         self._status = "Starting"
 
     def request_stop(self, *_: object) -> None:
@@ -191,6 +192,8 @@ class Daemon:
             if self.api is not None:
                 self.api.stop()
             logger.info("Station stopping: finishing files in progress")
+            if self.fixer is not None:
+                self.fixer.stop()
             self.station.shutdown()
             if self.lines is not None:
                 self.lines.stop()
@@ -210,6 +213,11 @@ class Daemon:
         except UploaderError as exc:
             logger.error("Station tick failed: %s", exc)
         state = self._write_state()
+        if self.fixer is not None:
+            try:
+                self.fixer.observe(state)  # Starts Claude Code in the background, never waits.
+            except Exception as exc:  # noqa: BLE001 - the fixer must never stop the station
+                logger.warning("Claude fixer: %s", exc)
         self._status = status_line(state)
         self._last_pass = time.monotonic()
 
@@ -283,6 +291,22 @@ class Daemon:
                              str(self._settings.resolve(socket)) if socket else "")
         if not self.api.start():
             self.api_error = self.api.error  # Uploads continue; the CLI falls back to the DB.
+
+    def _fixer(self, settings):
+        """Claude Code fixes problems while uploads continue (claude_fix in config.yaml)."""
+        if not settings.claude_fix.enabled:
+            return None
+        import sys
+
+        from src.ai.claude_fixer import APP_DIR, ClaudeFixer, FixContext
+
+        config = settings.base_dir / "config.yaml"
+        context = FixContext(sys.executable, str(APP_DIR / "main.py"),
+                             str(config) if config.exists() else None,
+                             str(settings.resolve(settings.logging.directory)))
+        return ClaudeFixer(settings.claude_fix, context,
+                           settings.resolve(settings.logging.directory) / "claude-fixes",
+                           APP_DIR, publish=self.bus.publish)
 
     def _write_state(self, stopped: bool = False) -> dict:
         state = self.station.view().to_dict()

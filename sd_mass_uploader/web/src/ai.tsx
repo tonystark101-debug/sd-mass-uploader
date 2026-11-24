@@ -1,5 +1,7 @@
 // The AI troubleshooter: a conversation, with an approval step for every command it wants to run.
-import { Bot, Send, ShieldCheck, Square } from "lucide-react";
+import {
+  Bot, Check, Send, ShieldCheck, Square, X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api";
 import { clock } from "./format";
@@ -90,10 +92,10 @@ export function AiPanel({ start, onClose }: {
             <code className="command">{session.pending_approval.summary}</code>
             <p><strong>Why:</strong> {session.pending_approval.reason}</p>
             <div className="actions-row">
-              <Button kind="primary" busy={busy === "decide"} onClick={() => decide(true)}>
+              <Button icon={<Check size={16} />} kind="primary" busy={busy === "decide"} onClick={() => decide(true)}>
                 Allow once
               </Button>
-              <Button kind="secondary" onClick={() => decide(false)}>Decline</Button>
+              <Button icon={<X size={16} />} kind="secondary" onClick={() => decide(false)}>Decline</Button>
             </div>
           </div>
         )}
